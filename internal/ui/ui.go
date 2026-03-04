@@ -98,7 +98,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return TickMsg(t)
 	})
 
-	// Handle Modal Inputs first
 	if m.inputMode == SearchInput {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
@@ -168,7 +167,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd
 	}
 
-	// Main App Interaction
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.showHelp {
@@ -402,8 +400,9 @@ func (m Model) getItemCount() int {
 }
 
 func (m Model) getMaxVisibleItems() int {
-	// sidebarHeight(m.height-3) - padding(4) - title(1) - spacing(1) - searchBar(3)
-	offset := 9
+	// Available height: terminal height - player bar(3) - some breathing room(4)
+	// We want to be conservative to prevent overflow
+	offset := 8
 	if m.inputMode == SearchInput || m.searchInput.Value() != "" || m.inputMode == PlaylistNameInput {
 		offset = 12
 	}
@@ -439,19 +438,23 @@ func (m Model) View() string {
 		return m.renderPlaylistSelect()
 	}
 
-	sidebarHeight := m.height - 3
-
+	// Calculate core heights
+	contentHeight := m.height - 3
+	
 	sidebar := m.styles.Sidebar.
-		Height(sidebarHeight).
+		Height(contentHeight).
 		Render(m.renderSidebar())
 
-	mainViewWidth := m.width - 25 - 4
+	mainViewWidth := m.width - 25 - 2
 	mainView := m.styles.MainView.
 		Width(mainViewWidth).
-		Height(sidebarHeight).
+		Height(contentHeight).
 		Render(m.renderMainView())
 
 	content := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainView)
+	
+	// Ensure content is perfectly placed within available height
+	content = lipgloss.Place(m.width, contentHeight, lipgloss.Center, lipgloss.Center, content)
 
 	playerBar := m.styles.PlayerBar.
 		Width(m.width - 4).
@@ -500,7 +503,7 @@ func (m Model) renderHelp() string {
 		{"h / l", "Seek -10s / +10s"},
 		{"/", "Search in current view"},
 		{"s", "Scan Music folder"},
-		{"1-4", "Switch views (Home, Artists, Albums, Playlists)"},
+		{"1-4", "Switch views"},
 		{"+", "Create New Playlist"},
 		{"a", "Add track to playlist"},
 		{"?", "Toggle help"},
@@ -560,8 +563,7 @@ func (m Model) renderMainView() string {
 	}
 
 	var searchBar string
-	// Width for components in main view
-	mainWidth := m.width - 25 - 10
+	mainWidth := m.width - 25 - 6
 
 	if m.inputMode == SearchInput || m.searchInput.Value() != "" {
 		prompt := " "
@@ -592,7 +594,7 @@ func (m Model) renderMainView() string {
 	}
 
 	if searchBar != "" {
-		return lipgloss.JoinVertical(lipgloss.Left, searchBar, content)
+		return lipgloss.JoinVertical(lipgloss.Left, searchBar, "\n", content)
 	}
 	return content
 }
@@ -775,7 +777,7 @@ func (m Model) renderPlayerBar() string {
 }
 
 func (m Model) renderVisualizer(width int) string {
-	if m.audioEngine == nil || m.audioEngine.Ctrl == nil || m.audioEngine.Ctrl.Paused {
+	if m.audioEngine == nil || m.audioEngine.Ctrl == nil && m.audioEngine.Ctrl.Paused {
 		return "      "
 	}
 	

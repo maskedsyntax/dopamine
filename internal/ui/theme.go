@@ -47,9 +47,9 @@ func GetStyles(t Theme) Styles {
 			Width(25).
 			Border(lipgloss.NormalBorder(), false, true, false, false).
 			BorderForeground(t.Gray).
-			Padding(2, 2),
+			Padding(1, 2),
 		MainView: lipgloss.NewStyle().
-			Padding(2, 4), // Increased top and side padding
+			Padding(0, 2), // Removed top padding, will handle dynamically
 		PlayerBar: lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), true, false, false, false).
 			BorderForeground(t.Primary).
