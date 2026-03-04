@@ -78,6 +78,12 @@ type ScanCompleteMsg struct {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+	var tickCmd tea.Cmd
+
+	// Standard tick command to keep the loop going
+	tickCmd = tea.Tick(time.Millisecond*50, func(t time.Time) tea.Msg {
+		return TickMsg(t)
+	})
 
 	if m.isSearching {
 		switch msg := msg.(type) {
@@ -86,19 +92,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter", "esc":
 				m.isSearching = false
 				m.searchInput.Blur()
-				return m, nil
+				return m, tickCmd
 			}
+		case TickMsg:
+			return m, tickCmd
 		}
 		m.searchInput, cmd = m.searchInput.Update(msg)
 		m.filterCurrentView()
-		return m, cmd
+		return m, tea.Batch(cmd, tickCmd)
 	}
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.showHelp {
 			m.showHelp = false
-			return m, nil
+			return m, tickCmd
 		}
 
 		switch msg.String() {
@@ -111,7 +119,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchInput.Focus()
 			m.cursor = 0
 			m.topIndex = 0
-			return m, textinput.Blink
+			return m, tea.Batch(textinput.Blink, tickCmd)
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -134,7 +142,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "s":
 			if !m.scanning {
 				m.scanning = true
-				return m, func() tea.Msg {
+				return m, tea.Batch(func() tea.Msg {
 					scanner := library.NewScanner(m.db)
 					home, _ := os.UserHomeDir()
 					musicDir := filepath.Join(home, "Music")
@@ -144,7 +152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					albums, _ := m.db.GetAlbums()
 					playlists, _ := m.db.GetPlaylists()
 					return ScanCompleteMsg{tracks, artists, albums, playlists}
-				}
+				}, tickCmd)
 			}
 		case "enter":
 			if m.mode == HomeView {
@@ -188,19 +196,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = PlaylistView
 			m.resetNavigation()
 		}
+		return m, tickCmd
 	case ScanCompleteMsg:
 		m.scanning = false
 		m.tracks = msg.tracks
 		m.artists = msg.artists
 		m.albums = msg.albums
 		m.playlists = msg.playlists
-		return m, nil
+		return m, tickCmd
 	case TickMsg:
-		return m, tea.Tick(time.Millisecond*50, func(t time.Time) tea.Msg {
-			return TickMsg(t)
-		})
+		return m, tickCmd
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		return m, tickCmd
 	}
 	return m, nil
 }
