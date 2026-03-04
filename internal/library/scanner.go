@@ -29,20 +29,13 @@ func (s *Scanner) ScanDirectory(root string) error {
 		if isAudioFile(path) {
 			track, err := s.extractMetadata(path)
 			if err != nil {
-				// Final fallback if everything fails
+				// Final fallback
 				fileName := filepath.Base(path)
 				fileName = strings.TrimSuffix(fileName, filepath.Ext(fileName))
-				
-				parentDir := filepath.Base(filepath.Dir(path))
-				artist := "Unknown Artist"
-				if parentDir != "Music" && parentDir != "Liked Music" && parentDir != "." {
-					artist = parentDir
-				}
-
 				return s.db.AddTrack(Track{
 					Path:   path,
 					Title:  fileName,
-					Artist: artist,
+					Artist: "Unknown Artist",
 					Album:  "Unknown Album",
 				})
 			}
@@ -61,8 +54,6 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 	// Default values derived from path
 	parentDir := filepath.Base(filepath.Dir(path))
 	defaultArtist := "Unknown Artist"
-	// If the folder is "Liked Music", it's probably not the artist name.
-	// But if it's "Linkin Park", it is. This is a heuristic.
 	if parentDir != "Music" && parentDir != "Liked Music" && parentDir != "Downloads" && parentDir != "." {
 		defaultArtist = parentDir
 	}
@@ -70,6 +61,22 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 	title := fileName
 	artist := defaultArtist
 	album := "Unknown Album"
+
+	// Special handling for WAV using our manual parser
+	if ext == ".wav" {
+		t, a, al, err := ExtractWavMetadata(path)
+		if err == nil {
+			if t != "" { title = t }
+			if a != "" { artist = a }
+			if al != "" { album = al }
+			return Track{
+				Path: path,
+				Title: title,
+				Artist: artist,
+				Album: album,
+			}, nil
+		}
+	}
 
 	// Special handling for MP3s
 	if ext == ".mp3" {
@@ -94,7 +101,7 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 		}
 	}
 
-	// Fallback to dhowden/tag for WAV, FLAC, etc.
+	// Fallback to dhowden/tag
 	f, err := os.Open(path)
 	if err != nil {
 		return Track{Path: path, Title: title, Artist: artist, Album: album}, err
@@ -116,9 +123,8 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 		}
 	}
 
-	// If after all that, we still have "Unknown Artist" but the filename 
-	// contains a dash, it might be "Artist - Title"
-	if artist == "Unknown Artist" && strings.Contains(fileName, " - ") {
+	// Filename dash heuristic
+	if (artist == "Unknown Artist" || artist == defaultArtist) && strings.Contains(fileName, " - ") {
 		parts := strings.SplitN(fileName, " - ", 2)
 		artist = strings.TrimSpace(parts[0])
 		title = strings.TrimSpace(parts[1])
