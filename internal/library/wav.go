@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// ExtractWavMetadata manually parses RIFF INFO chunks from a WAV file
+// ExtractWavMetadata manually parses RIFF INFO chunks and other tags from a WAV file
 func ExtractWavMetadata(path string) (title, artist, album string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -22,9 +22,10 @@ func ExtractWavMetadata(path string) (title, artist, album string, err error) {
 	}
 
 	if string(header[0:4]) != "RIFF" || string(header[8:12]) != "WAVE" {
-		return "", "", "", nil // Not a standard WAV
+		return "", "", "", nil
 	}
 
+	// Read chunks
 	for {
 		var chunkID [4]byte
 		var chunkSize uint32
@@ -32,20 +33,27 @@ func ExtractWavMetadata(path string) (title, artist, album string, err error) {
 			if err == io.EOF {
 				break
 			}
-			return "", "", "", err
+			return title, artist, album, nil // Return what we found
 		}
 		if err := binary.Read(f, binary.LittleEndian, &chunkSize); err != nil {
 			break
 		}
 
 		id := string(chunkID[:])
+		
+		// Handle ID3 chunk if it exists in WAV (some encoders do this)
+		if id == "id3 " || id == "ID3 " {
+			// We could try to parse this with id3v2 library, but for now let's skip
+			f.Seek(int64(chunkSize), io.SeekCurrent)
+			continue
+		}
+
 		if id == "LIST" {
 			var listType [4]byte
 			if _, err := io.ReadFull(f, listType[:]); err != nil {
 				break
 			}
 			if string(listType[:]) == "INFO" {
-				// We are in the INFO list
 				infoEnd := int64(chunkSize) - 4
 				currentPos := int64(0)
 				for currentPos < infoEnd {
@@ -59,6 +67,10 @@ func ExtractWavMetadata(path string) (title, artist, album string, err error) {
 					}
 					currentPos += 8
 
+					if subSize > 1024*1024 { // Sanity check
+						break
+					}
+
 					data := make([]byte, subSize)
 					if _, err := io.ReadFull(f, data); err != nil {
 						break
@@ -70,20 +82,31 @@ func ExtractWavMetadata(path string) (title, artist, album string, err error) {
 					}
 
 					val := strings.TrimRight(string(data), "\x00")
-					switch string(subID[:]) {
-					case "INAM":
-						title = val
-					case "IART":
-						artist = val
-					case "IPRD":
-						album = val
+					val = strings.TrimSpace(val)
+					
+					tag := string(subID[:])
+					// Map RIFF INFO tags to standard fields
+					// Ref: https://www.robotplanet.dk/programming/wav_format/
+					switch tag {
+					case "INAM", "titl":
+						if title == "" { title = val }
+					case "IART", "arch":
+						if artist == "" { artist = val }
+					case "IPRD", "prmp":
+						if album == "" { album = val }
 					}
 				}
 			} else {
 				f.Seek(int64(chunkSize)-4, io.SeekCurrent)
 			}
 		} else {
+			// Skip unknown chunks
 			f.Seek(int64(chunkSize), io.SeekCurrent)
+		}
+		
+		// Padding byte if chunk size is odd
+		if chunkSize%2 != 0 {
+			f.Seek(1, io.SeekCurrent)
 		}
 	}
 

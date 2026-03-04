@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"os/exec"
+	"encoding/json"
 
 	"github.com/bogem/id3v2/v2"
 	"github.com/dhowden/tag"
@@ -23,8 +25,6 @@ func (s *Scanner) ScanDirectory(root string) error {
 			return err
 		}
 		if info.IsDir() {
-			// If folder is named "Liked Music" or similar, we could treat it as a playlist
-			// For now, let's stick to standard indexing
 			return nil
 		}
 
@@ -64,67 +64,54 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 	artist := defaultArtist
 	album := "Unknown Album"
 
-	// Special handling for WAV using our manual parser
+	// 1. Try our manual WAV parser for RIFF INFO
 	if ext == ".wav" {
 		t, a, al, err := ExtractWavMetadata(path)
 		if err == nil {
 			if t != "" { title = t }
 			if a != "" { artist = a }
 			if al != "" { album = al }
-			return Track{
-				Path: path,
-				Title: title,
-				Artist: artist,
-				Album: album,
-			}, nil
 		}
 	}
 
-	// Special handling for MP3s
-	if ext == ".mp3" {
-		t, err := id3v2.Open(path, id3v2.Options{Parse: true})
+	// 2. Try FFPROBE as a high-reliability fallback if tags are still missing or known-generic
+	if artist == defaultArtist || artist == "Unknown Artist" || title == fileName {
+		t, a, al, err := extractWithFFProbe(path)
 		if err == nil {
-			defer t.Close()
-			if ti := t.Title(); ti != "" {
-				title = ti
-			}
-			if a := t.Artist(); a != "" {
-				artist = a
-			}
-			if al := t.Album(); al != "" {
-				album = al
-			}
-			return Track{
-				Path:   path,
-				Title:  title,
-				Artist: artist,
-				Album:  album,
-			}, nil
+			if t != "" { title = t }
+			if a != "" { artist = a }
+			if al != "" { album = al }
 		}
 	}
 
-	// Fallback to dhowden/tag
-	f, err := os.Open(path)
-	if err != nil {
-		return Track{Path: path, Title: title, Artist: artist, Album: album}, err
-	}
-	defer f.Close()
+	// 3. Try standard Go libraries if we still don't have good data
+	if artist == "Unknown Artist" || artist == defaultArtist {
+		if ext == ".mp3" {
+			t, err := id3v2.Open(path, id3v2.Options{Parse: true})
+			if err == nil {
+				defer t.Close()
+				if ti := t.Title(); ti != "" { title = ti }
+				if a := t.Artist(); a != "" { artist = a }
+				if al := t.Album(); al != "" { album = al }
+			}
+		}
 
-	m, err := tag.ReadFrom(f)
-	if err == nil {
-		if t := m.Title(); t != "" {
-			title = t
-		}
-		if a := m.Artist(); a != "" {
-			artist = a
-		} else if aa := m.AlbumArtist(); aa != "" {
-			artist = aa
-		}
-		if al := m.Album(); al != "" {
-			album = al
+		f, err := os.Open(path)
+		if err == nil {
+			m, err := tag.ReadFrom(f)
+			if err == nil {
+				if t := m.Title(); t != "" { title = t }
+				if a := m.Artist(); a != "" { artist = a } else if aa := m.AlbumArtist(); aa != "" { artist = aa }
+				if al := m.Album(); al != "" { album = al }
+			}
+			f.Close()
 		}
 	}
 
+	// 4. Cleanup and heuristics
+	if artist == "" || artist == "Unknown Artist" { artist = defaultArtist }
+	if title == "" { title = fileName }
+	
 	// Filename dash heuristic
 	if (artist == "Unknown Artist" || artist == defaultArtist) && strings.Contains(fileName, " - ") {
 		parts := strings.SplitN(fileName, " - ", 2)
@@ -138,6 +125,34 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 		Artist: artist,
 		Album:  album,
 	}, nil
+}
+
+func extractWithFFProbe(path string) (title, artist, album string, err error) {
+	cmd := exec.Command("ffprobe", "-v", "quiet", "-show_format", "-show_streams", "-print_format", "json", path)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", "", err
+	}
+
+	var data struct {
+		Format struct {
+			Tags map[string]string `json:"tags"`
+		} `json:"format"`
+	}
+
+	if err := json.Unmarshal(out, &data); err != nil {
+		return "", "", "", err
+	}
+
+	tags := data.Format.Tags
+	title = tags["title"]
+	artist = tags["artist"]
+	if artist == "" {
+		artist = tags["album_artist"]
+	}
+	album = tags["album"]
+
+	return title, artist, album, nil
 }
 
 func isAudioFile(path string) bool {
