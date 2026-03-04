@@ -3,6 +3,7 @@ module github.com/maskedsyntax/dopamine
 go 1.25.0
 
 require (
+	github.com/bogem/id3v2/v2 v2.1.4
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
