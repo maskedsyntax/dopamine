@@ -49,50 +49,34 @@ func (s *Scanner) ScanDirectory(root string) error {
 
 func (s *Scanner) extractMetadata(path string) (Track, error) {
 	ext := strings.ToLower(filepath.Ext(path))
-	
 	fileName := filepath.Base(path)
 	fileName = strings.TrimSuffix(fileName, ext)
 	
-	// Default values derived from path
-	parentDir := filepath.Base(filepath.Dir(path))
-	defaultArtist := "Unknown Artist"
-	if parentDir != "Music" && parentDir != "Liked Music" && parentDir != "Downloads" && parentDir != "." {
-		defaultArtist = parentDir
-	}
+	// Initial empty values
+	var title, artist, album string
 
-	title := fileName
-	artist := defaultArtist
-	album := "Unknown Album"
+	// 1. Try FFPROBE first as it is the most reliable
+	title, artist, album, _ = extractWithFFProbe(path)
 
-	// 1. Try our manual WAV parser for RIFF INFO
-	if ext == ".wav" {
+	// 2. Try our manual WAV parser for RIFF INFO if still missing
+	if ext == ".wav" && (title == "" || artist == "") {
 		t, a, al, err := ExtractWavMetadata(path)
 		if err == nil {
-			if t != "" { title = t }
-			if a != "" { artist = a }
-			if al != "" { album = al }
+			if title == "" { title = t }
+			if artist == "" { artist = a }
+			if album == "" { album = al }
 		}
 	}
 
-	// 2. Try FFPROBE as a high-reliability fallback if tags are still missing or known-generic
-	if artist == defaultArtist || artist == "Unknown Artist" || title == fileName {
-		t, a, al, err := extractWithFFProbe(path)
-		if err == nil {
-			if t != "" { title = t }
-			if a != "" { artist = a }
-			if al != "" { album = al }
-		}
-	}
-
-	// 3. Try standard Go libraries if we still don't have good data
-	if artist == "Unknown Artist" || artist == defaultArtist {
+	// 3. Try standard Go libraries if still missing
+	if title == "" || artist == "" {
 		if ext == ".mp3" {
 			t, err := id3v2.Open(path, id3v2.Options{Parse: true})
 			if err == nil {
 				defer t.Close()
-				if ti := t.Title(); ti != "" { title = ti }
-				if a := t.Artist(); a != "" { artist = a }
-				if al := t.Album(); al != "" { album = al }
+				if title == "" { title = t.Title() }
+				if artist == "" { artist = t.Artist() }
+				if album == "" { album = t.Album() }
 			}
 		}
 
@@ -100,23 +84,40 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 		if err == nil {
 			m, err := tag.ReadFrom(f)
 			if err == nil {
-				if t := m.Title(); t != "" { title = t }
-				if a := m.Artist(); a != "" { artist = a } else if aa := m.AlbumArtist(); aa != "" { artist = aa }
-				if al := m.Album(); al != "" { album = al }
+				if title == "" { title = m.Title() }
+				if artist == "" { 
+					artist = m.Artist()
+					if artist == "" { artist = m.AlbumArtist() }
+				}
+				if album == "" { album = m.Album() }
 			}
 			f.Close()
 		}
 	}
 
-	// 4. Cleanup and heuristics
-	if artist == "" || artist == "Unknown Artist" { artist = defaultArtist }
-	if title == "" { title = fileName }
-	
-	// Filename dash heuristic
-	if (artist == "Unknown Artist" || artist == defaultArtist) && strings.Contains(fileName, " - ") {
-		parts := strings.SplitN(fileName, " - ", 2)
-		artist = strings.TrimSpace(parts[0])
-		title = strings.TrimSpace(parts[1])
+	// 4. Heuristics only as a last resort
+	if artist == "" || artist == "Unknown Artist" {
+		// Try filename dash heuristic
+		if strings.Contains(fileName, " - ") {
+			parts := strings.SplitN(fileName, " - ", 2)
+			artist = strings.TrimSpace(parts[0])
+			title = strings.TrimSpace(parts[1])
+		} else {
+			// Try folder name as artist ONLY if it looks like a real name
+			parentDir := filepath.Base(filepath.Dir(path))
+			if parentDir != "Music" && parentDir != "Liked Music" && parentDir != "Downloads" && parentDir != "." && parentDir != "new" && parentDir != "check" {
+				artist = parentDir
+			} else {
+				artist = "Unknown Artist"
+			}
+		}
+	}
+
+	if title == "" {
+		title = fileName
+	}
+	if album == "" {
+		album = "Unknown Album"
 	}
 
 	return Track{
@@ -145,12 +146,20 @@ func extractWithFFProbe(path string) (title, artist, album string, err error) {
 	}
 
 	tags := data.Format.Tags
-	title = tags["title"]
-	artist = tags["artist"]
-	if artist == "" {
-		artist = tags["album_artist"]
+	// ffprobe tags can be lowercase or uppercase depending on encoder
+	for k, v := range tags {
+		lowerK := strings.ToLower(k)
+		switch lowerK {
+		case "title":
+			if title == "" { title = v }
+		case "artist":
+			if artist == "" { artist = v }
+		case "album":
+			if album == "" { album = v }
+		case "album_artist":
+			if artist == "" { artist = v }
+		}
 	}
-	album = tags["album"]
 
 	return title, artist, album, nil
 }
