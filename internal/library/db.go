@@ -33,6 +33,17 @@ func NewDB(path string) (*DB, error) {
 			album TEXT,
 			duration INTEGER
 		);
+		CREATE TABLE IF NOT EXISTS playlists (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT UNIQUE
+		);
+		CREATE TABLE IF NOT EXISTS playlist_tracks (
+			playlist_id INTEGER,
+			track_id INTEGER,
+			FOREIGN KEY(playlist_id) REFERENCES playlists(id),
+			FOREIGN KEY(track_id) REFERENCES tracks(id),
+			PRIMARY KEY(playlist_id, track_id)
+		);
 	`)
 	if err != nil {
 		return nil, err
@@ -100,4 +111,21 @@ func (db *DB) GetAlbums() ([]string, error) {
 		}
 	}
 	return albums, nil
+}
+
+func (db *DB) GetPlaylists() ([]string, error) {
+	rows, err := db.conn.Query("SELECT name FROM playlists ORDER BY name ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var p []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err == nil {
+			p = append(p, n)
+		}
+	}
+	return p, nil
 }

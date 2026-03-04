@@ -39,9 +39,10 @@ func InitialModelWithDeps(cfg Config) (Model, error) {
 	tracks, _ := db.GetAllTracks()
 	artists, _ := db.GetArtists()
 	albums, _ := db.GetAlbums()
+	playlists, _ := db.GetPlaylists()
 
 	ti := textinput.New()
-	ti.Placeholder = "Search tracks..."
+	ti.Placeholder = "Search..."
 	ti.CharLimit = 156
 	ti.Width = 20
 
@@ -53,6 +54,7 @@ func InitialModelWithDeps(cfg Config) (Model, error) {
 		tracks:      tracks,
 		artists:     artists,
 		albums:      albums,
+		playlists:   playlists,
 		searchInput: ti,
 	}, nil
 }

@@ -23,6 +23,8 @@ func (s *Scanner) ScanDirectory(root string) error {
 			return err
 		}
 		if info.IsDir() {
+			// If folder is named "Liked Music" or similar, we could treat it as a playlist
+			// For now, let's stick to standard indexing
 			return nil
 		}
 

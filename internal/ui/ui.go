@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"math"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,13 +36,15 @@ type Model struct {
 	tracks      []library.Track
 	artists     []string
 	albums      []string
+	playlists   []string
 	
 	// Search state
-	searchInput     textinput.Model
-	isSearching     bool
-	filteredTracks  []library.Track
-	filteredArtists []string
-	filteredAlbums  []string
+	searchInput      textinput.Model
+	isSearching      bool
+	filteredTracks   []library.Track
+	filteredArtists  []string
+	filteredAlbums   []string
+	filteredPlaylists []string
 	
 	cursor      int
 	topIndex    int // For scrolling
@@ -67,9 +70,10 @@ func (m Model) Init() tea.Cmd {
 
 type TickMsg time.Time
 type ScanCompleteMsg struct {
-	tracks  []library.Track
-	artists []string
-	albums  []string
+	tracks    []library.Track
+	artists   []string
+	albums    []string
+	playlists []string
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -138,7 +142,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					tracks, _ := m.db.GetAllTracks()
 					artists, _ := m.db.GetArtists()
 					albums, _ := m.db.GetAlbums()
-					return ScanCompleteMsg{tracks, artists, albums}
+					playlists, _ := m.db.GetPlaylists()
+					return ScanCompleteMsg{tracks, artists, albums, playlists}
 				}
 			}
 		case "enter":
@@ -188,6 +193,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tracks = msg.tracks
 		m.artists = msg.artists
 		m.albums = msg.albums
+		m.playlists = msg.playlists
 		return m, nil
 	case TickMsg:
 		return m, tea.Tick(time.Millisecond*50, func(t time.Time) tea.Msg {
@@ -205,6 +211,7 @@ func (m *Model) resetNavigation() {
 	m.filteredTracks = nil
 	m.filteredArtists = nil
 	m.filteredAlbums = nil
+	m.filteredPlaylists = nil
 	m.searchInput.SetValue("")
 }
 
@@ -214,6 +221,7 @@ func (m *Model) filterCurrentView() {
 		m.filteredTracks = nil
 		m.filteredArtists = nil
 		m.filteredAlbums = nil
+		m.filteredPlaylists = nil
 		return
 	}
 
@@ -240,6 +248,12 @@ func (m *Model) filterCurrentView() {
 		for i, match := range matches {
 			m.filteredAlbums[i] = m.albums[match.Index]
 		}
+	case PlaylistView:
+		matches := fuzzy.Find(query, m.playlists)
+		m.filteredPlaylists = make([]string, len(matches))
+		for i, match := range matches {
+			m.filteredPlaylists[i] = m.playlists[match.Index]
+		}
 	}
 	
 	if m.cursor >= m.getItemCount() {
@@ -260,6 +274,9 @@ func (m Model) getItemCount() int {
 	case AlbumView:
 		if isSearching { return len(m.filteredAlbums) }
 		return len(m.albums)
+	case PlaylistView:
+		if isSearching { return len(m.filteredPlaylists) }
+		return len(m.playlists)
 	default:
 		return 0
 	}
@@ -377,7 +394,7 @@ func (m Model) renderMainView() string {
 	case AlbumView:
 		return searchBar + m.renderAlbums()
 	case PlaylistView:
-		return "Playlists view coming soon..."
+		return searchBar + m.renderPlaylists()
 	default:
 		return ""
 	}
@@ -491,6 +508,40 @@ func (m Model) renderAlbums() string {
 	return b.String()
 }
 
+func (m Model) renderPlaylists() string {
+	p := m.playlists
+	if m.searchInput.Value() != "" { p = m.filteredPlaylists }
+
+	if len(p) == 0 {
+		if m.searchInput.Value() != "" { return "No matches found." }
+		return "No playlists found. Create one with '+' (not yet implemented)."
+	}
+
+	var b strings.Builder
+	b.WriteString(m.styles.Title.Render("Playlists"))
+	b.WriteString("\n\n")
+
+	offset := 5
+	if m.searchInput.Value() != "" { offset = 7 }
+	maxVisible := m.height - 3 - offset
+	if maxVisible <= 0 { return "Terminal too small" }
+
+	endIndex := m.topIndex + maxVisible
+	if endIndex > len(p) { endIndex = len(p) }
+
+	for i := m.topIndex; i < endIndex; i++ {
+		cursor := " "
+		style := lipgloss.NewStyle()
+		if i == m.cursor {
+			cursor = ">"
+			style = m.styles.ActiveItem
+		}
+		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, p[i])))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func (m Model) renderPlayerBar() string {
 	status := "󰐊 Play"
 	if m.audioEngine != nil && m.audioEngine.Ctrl != nil && !m.audioEngine.Ctrl.Paused {
@@ -519,15 +570,41 @@ func (m Model) renderPlayerBar() string {
 	barWidth := 25
 	bar := renderSmoothBar(barWidth, progress)
 
-	visualizer := " ▂▃▅▆▇"
-	if m.audioEngine != nil && m.audioEngine.Ctrl != nil && !m.audioEngine.Ctrl.Paused {
-		// randomize mock visualizer
-	} else {
-		visualizer = "      "
-	}
+	visualizer := m.renderVisualizer(8)
 
 	return fmt.Sprintf("%s %s %s [%s] %s | 󰒭 Prev  󰒮 Next  󰓃 Vol", 
 		visualizer, status, truncate(trackInfo, width-65), bar, timeInfo)
+}
+
+func (m Model) renderVisualizer(width int) string {
+	if m.audioEngine == nil || m.audioEngine.Ctrl == nil || m.audioEngine.Ctrl.Paused {
+		return "      "
+	}
+	
+	samples := m.audioEngine.GetSamples()
+	if len(samples) == 0 {
+		return "      "
+	}
+
+	// Simple visualizer logic
+	bars := []string{" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"}
+	var res strings.Builder
+	
+	// Average samples into buckets
+	bucketSize := len(samples) / width
+	for i := 0; i < width; i++ {
+		sum := 0.0
+		for j := 0; j < bucketSize; j++ {
+			sum += math.Abs(samples[i*bucketSize+j])
+		}
+		avg := sum / float64(bucketSize)
+		// Scale avg to bars length
+		idx := int(avg * 15) // heuristic scaling
+		if idx >= len(bars) { idx = len(bars) - 1 }
+		res.WriteString(bars[idx])
+	}
+	
+	return m.styles.ActiveItem.Render(res.String())
 }
 
 func renderSmoothBar(width int, progress float64) string {

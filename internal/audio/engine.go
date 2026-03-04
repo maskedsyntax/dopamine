@@ -15,6 +15,7 @@ type Engine struct {
 	SampleRate beep.SampleRate
 	Ctrl       *beep.Ctrl
 	Streamer   beep.StreamSeekCloser
+	Visualizer *VisualizerStreamer
 	Format     beep.Format
 }
 
@@ -56,8 +57,11 @@ func (e *Engine) PlayFile(path string) error {
 	// Resample to engine's sample rate to ensure correct playback speed
 	resampled := beep.Resample(4, format.SampleRate, e.SampleRate, streamer)
 	
-	e.Streamer = streamer // Note: we close the original streamer later
-	e.Ctrl = &beep.Ctrl{Streamer: resampled, Paused: false}
+	// Wrap with visualizer
+	e.Visualizer = NewVisualizerStreamer(resampled, 1024)
+	
+	e.Streamer = streamer
+	e.Ctrl = &beep.Ctrl{Streamer: e.Visualizer, Paused: false}
 
 	speaker.Clear()
 	speaker.Play(e.Ctrl)
@@ -71,6 +75,13 @@ func (e *Engine) TogglePause() {
 		e.Ctrl.Paused = !e.Ctrl.Paused
 		speaker.Unlock()
 	}
+}
+
+func (e *Engine) GetSamples() []float64 {
+	if e.Visualizer != nil {
+		return e.Visualizer.GetSamples()
+	}
+	return nil
 }
 
 func endsWith(s, suffix string) bool {
