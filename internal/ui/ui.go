@@ -184,16 +184,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.inputMode = SearchInput
 			m.searchInput.Focus()
-			// Keep existing filter if any, or reset if desired
 			return m, tea.Batch(textinput.Blink, tickCmd)
 		case "backspace":
-			// If we have a search query, backspace opens search again to edit
 			if m.searchInput.Value() != "" {
 				m.inputMode = SearchInput
 				m.searchInput.Focus()
 				return m, tickCmd
 			}
-			// Otherwise handle view navigation
 			if m.mode == PlaylistTrackView {
 				m.mode = PlaylistView
 				m.resetNavigation()
@@ -405,10 +402,10 @@ func (m Model) getItemCount() int {
 }
 
 func (m Model) getMaxVisibleItems() int {
-	// sidebarHeight(m.height-3) - title(1) - spacing(1) - searchBar(3)
-	offset := 5
+	// sidebarHeight(m.height-3) - padding(4) - title(1) - spacing(1) - searchBar(3)
+	offset := 9
 	if m.inputMode == SearchInput || m.searchInput.Value() != "" || m.inputMode == PlaylistNameInput {
-		offset = 8
+		offset = 12
 	}
 	v := m.height - 3 - offset
 	if v <= 0 { return 1 }
@@ -468,10 +465,10 @@ func (m Model) renderPlaylistSelect() string {
 	b.WriteString(m.styles.Title.Render("Add to Playlist"))
 	b.WriteString("\n\n")
 	for i, p := range m.playlists {
-		cursor := " "
+		cursor := "  "
 		style := m.styles.InactiveItem
 		if i == m.cursor {
-			cursor = ">"
+			cursor = "❯ "
 			style = m.styles.ActiveItem
 		}
 		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, p)))
@@ -559,36 +556,45 @@ func (m Model) renderSidebar() string {
 
 func (m Model) renderMainView() string {
 	if m.scanning {
-		return lipgloss.Place(m.width-30, m.height-5, lipgloss.Center, lipgloss.Center, "Scanning library...\n\nThis may take a moment.")
+		return lipgloss.Place(m.width-30, m.height-10, lipgloss.Center, lipgloss.Center, "Scanning library...\n\nThis may take a moment.")
 	}
 
 	var searchBar string
+	// Width for components in main view
+	mainWidth := m.width - 25 - 10
+
 	if m.inputMode == SearchInput || m.searchInput.Value() != "" {
 		prompt := " "
+		m.searchInput.Width = mainWidth - 5
 		if m.inputMode == SearchInput {
-			searchBar = m.styles.SearchHeader.Render(m.styles.ActiveItem.Render(prompt) + m.searchInput.View()) + "\n"
+			searchBar = m.styles.SearchHeader.Width(mainWidth).Render(m.styles.ActiveItem.Render(prompt) + m.searchInput.View())
 		} else {
-			searchBar = m.styles.SearchHeader.Render(m.styles.InactiveItem.Render(prompt) + m.searchInput.Value()) + "\n"
+			searchBar = m.styles.SearchHeader.Width(mainWidth).Render(m.styles.InactiveItem.Render(prompt) + m.searchInput.Value())
 		}
 	}
 	if m.inputMode == PlaylistNameInput {
-		searchBar = m.styles.SearchHeader.Render(m.styles.ActiveItem.Render("󰲸 Name: ") + m.playlistInput.View()) + "\n"
+		m.playlistInput.Width = mainWidth - 10
+		searchBar = m.styles.SearchHeader.Width(mainWidth).Render(m.styles.ActiveItem.Render("󰲸 Name: ") + m.playlistInput.View())
 	}
 
+	var content string
 	switch m.mode {
 	case HomeView, PlaylistTrackView:
 		title := "All Tracks"
 		if m.mode == PlaylistTrackView { title = "Playlist: " + m.selectedPlaylist }
-		return searchBar + m.renderTracks(title)
+		content = m.renderTracks(title)
 	case ArtistView:
-		return searchBar + m.renderArtists()
+		content = m.renderArtists()
 	case AlbumView:
-		return searchBar + m.renderAlbums()
+		content = m.renderAlbums()
 	case PlaylistView:
-		return searchBar + m.renderPlaylists()
-	default:
-		return ""
+		content = m.renderPlaylists()
 	}
+
+	if searchBar != "" {
+		return lipgloss.JoinVertical(lipgloss.Left, searchBar, content)
+	}
+	return content
 }
 
 func (m Model) renderTracks(title string) string {
@@ -613,9 +619,8 @@ func (m Model) renderTracks(title string) string {
 	activeStyle := m.styles.ActiveItem
 	normalStyle := m.styles.InactiveItem
 	
-	// Pre-calculate widths
-	availableWidth := m.width - 25 - 10
-	titleWidth := int(float64(availableWidth) * 0.6)
+	availableWidth := m.width - 25 - 12
+	titleWidth := int(float64(availableWidth) * 0.5)
 	if titleWidth < 20 { titleWidth = 20 }
 	artistWidth := availableWidth - titleWidth
 	if artistWidth < 15 { artistWidth = 15 }
