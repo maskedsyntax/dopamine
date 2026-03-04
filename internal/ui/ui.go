@@ -37,9 +37,11 @@ type Model struct {
 	albums      []string
 	
 	// Search state
-	searchInput    textinput.Model
-	isSearching    bool
-	filteredTracks []library.Track
+	searchInput     textinput.Model
+	isSearching     bool
+	filteredTracks  []library.Track
+	filteredArtists []string
+	filteredAlbums  []string
 	
 	cursor      int
 	topIndex    int // For scrolling
@@ -56,7 +58,7 @@ type Model struct {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		tea.Tick(time.Second/1, func(t time.Time) tea.Msg {
+		tea.Tick(time.Millisecond*50, func(t time.Time) tea.Msg {
 			return TickMsg(t)
 		}),
 		textinput.Blink,
@@ -84,7 +86,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.searchInput, cmd = m.searchInput.Update(msg)
-		m.filterTracks()
+		m.filterCurrentView()
 		return m, cmd
 	}
 
@@ -118,6 +120,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < count-1 {
 				m.cursor++
 				maxVisible := m.height - 3 - 5
+				if m.isSearching || m.searchInput.Value() != "" {
+					maxVisible -= 2
+				}
 				if m.cursor >= m.topIndex+maxVisible {
 					m.topIndex = m.cursor - maxVisible + 1
 				}
@@ -137,17 +142,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "enter":
-			targetTracks := m.tracks
-			if len(m.filteredTracks) > 0 || m.searchInput.Value() != "" {
-				targetTracks = m.filteredTracks
-			}
-
-			if m.mode == HomeView && len(targetTracks) > 0 {
-				m.queue = targetTracks
-				m.playingIndex = m.cursor
-				track := m.queue[m.playingIndex]
-				m.current = &track
-				m.audioEngine.PlayFile(track.Path)
+			if m.mode == HomeView {
+				tracks := m.getCurrentTracks()
+				if len(tracks) > 0 {
+					m.queue = tracks
+					m.playingIndex = m.cursor
+					track := m.queue[m.playingIndex]
+					m.current = &track
+					m.audioEngine.PlayFile(track.Path)
+				}
 			}
 		case "n": // Next
 			if len(m.queue) > 0 && m.playingIndex < len(m.queue)-1 {
@@ -169,21 +172,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "1":
 			m.mode = HomeView
-			m.cursor = 0
-			m.topIndex = 0
-			m.filteredTracks = nil
+			m.resetNavigation()
 		case "2":
 			m.mode = ArtistView
-			m.cursor = 0
-			m.topIndex = 0
+			m.resetNavigation()
 		case "3":
 			m.mode = AlbumView
-			m.cursor = 0
-			m.topIndex = 0
+			m.resetNavigation()
 		case "4":
 			m.mode = PlaylistView
-			m.cursor = 0
-			m.topIndex = 0
+			m.resetNavigation()
 		}
 	case ScanCompleteMsg:
 		m.scanning = false
@@ -192,9 +190,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.albums = msg.albums
 		return m, nil
 	case TickMsg:
-		// Auto-advance if track finished? 
-		// Beep doesn't easily tell us when a track ends without wrapping it in a custom streamer
-		return m, tea.Tick(time.Second/1, func(t time.Time) tea.Msg {
+		return m, tea.Tick(time.Millisecond*50, func(t time.Time) tea.Msg {
 			return TickMsg(t)
 		})
 	case tea.WindowSizeMsg:
@@ -203,44 +199,77 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) filterTracks() {
+func (m *Model) resetNavigation() {
+	m.cursor = 0
+	m.topIndex = 0
+	m.filteredTracks = nil
+	m.filteredArtists = nil
+	m.filteredAlbums = nil
+	m.searchInput.SetValue("")
+}
+
+func (m *Model) filterCurrentView() {
 	query := m.searchInput.Value()
 	if query == "" {
 		m.filteredTracks = nil
+		m.filteredArtists = nil
+		m.filteredAlbums = nil
 		return
 	}
 
-	var targets []string
-	for _, t := range m.tracks {
-		targets = append(targets, fmt.Sprintf("%s %s %s", t.Title, t.Artist, t.Album))
-	}
-
-	matches := fuzzy.Find(query, targets)
-	m.filteredTracks = make([]library.Track, len(matches))
-	for i, match := range matches {
-		m.filteredTracks[i] = m.tracks[match.Index]
+	switch m.mode {
+	case HomeView:
+		var targets []string
+		for _, t := range m.tracks {
+			targets = append(targets, fmt.Sprintf("%s %s %s", t.Title, t.Artist, t.Album))
+		}
+		matches := fuzzy.Find(query, targets)
+		m.filteredTracks = make([]library.Track, len(matches))
+		for i, match := range matches {
+			m.filteredTracks[i] = m.tracks[match.Index]
+		}
+	case ArtistView:
+		matches := fuzzy.Find(query, m.artists)
+		m.filteredArtists = make([]string, len(matches))
+		for i, match := range matches {
+			m.filteredArtists[i] = m.artists[match.Index]
+		}
+	case AlbumView:
+		matches := fuzzy.Find(query, m.albums)
+		m.filteredAlbums = make([]string, len(matches))
+		for i, match := range matches {
+			m.filteredAlbums[i] = m.albums[match.Index]
+		}
 	}
 	
-	if m.cursor >= len(m.filteredTracks) {
+	if m.cursor >= m.getItemCount() {
 		m.cursor = 0
 		m.topIndex = 0
 	}
 }
 
 func (m Model) getItemCount() int {
-	if m.mode == HomeView && (len(m.filteredTracks) > 0 || m.searchInput.Value() != "") {
-		return len(m.filteredTracks)
-	}
+	isSearching := m.searchInput.Value() != ""
 	switch m.mode {
 	case HomeView:
+		if isSearching { return len(m.filteredTracks) }
 		return len(m.tracks)
 	case ArtistView:
+		if isSearching { return len(m.filteredArtists) }
 		return len(m.artists)
 	case AlbumView:
+		if isSearching { return len(m.filteredAlbums) }
 		return len(m.albums)
 	default:
 		return 0
 	}
+}
+
+func (m Model) getCurrentTracks() []library.Track {
+	if m.searchInput.Value() != "" {
+		return m.filteredTracks
+	}
+	return m.tracks
 }
 
 func (m Model) View() string {
@@ -285,14 +314,14 @@ func (m Model) renderHelp() string {
   Space        : Pause/Resume
   n            : Next track
   p            : Previous track
-  /            : Search tracks
+  /            : Search in current view
   s            : Scan Music folder
   1, 2, 3, 4   : Switch views (Home, Artists, Albums, Playlists)
   ?            : Toggle help
   q / Ctrl+C   : Quit
 
   SEARCH
-  Type to filter tracks. Press Enter or Esc to finish searching.
+  Type to filter items. Press Enter or Esc to finish searching.
 
   Press any key to return...
 `
@@ -344,9 +373,9 @@ func (m Model) renderMainView() string {
 	case HomeView:
 		return searchBar + m.renderTracks()
 	case ArtistView:
-		return m.renderArtists()
+		return searchBar + m.renderArtists()
 	case AlbumView:
-		return m.renderAlbums()
+		return searchBar + m.renderAlbums()
 	case PlaylistView:
 		return "Playlists view coming soon..."
 	default:
@@ -355,18 +384,14 @@ func (m Model) renderMainView() string {
 }
 
 func (m Model) renderTracks() string {
-	tracks := m.tracks
+	tracks := m.getCurrentTracks()
 	title := "All Tracks"
-	
-	if len(m.filteredTracks) > 0 || m.searchInput.Value() != "" {
-		tracks = m.filteredTracks
+	if m.searchInput.Value() != "" {
 		title = fmt.Sprintf("Search Results (%d)", len(tracks))
 	}
 
 	if len(tracks) == 0 {
-		if m.searchInput.Value() != "" {
-			return "No matches found."
-		}
+		if m.searchInput.Value() != "" { return "No matches found." }
 		return "No tracks found.\n\nPress 's' to scan your Music folder.\nPress '?' for help."
 	}
 
@@ -375,16 +400,12 @@ func (m Model) renderTracks() string {
 	b.WriteString("\n\n")
 
 	offset := 5
-	if m.isSearching || m.searchInput.Value() != "" {
-		offset = 7
-	}
+	if m.searchInput.Value() != "" { offset = 7 }
 	maxVisible := m.height - 3 - offset
 	if maxVisible <= 0 { return "Terminal too small" }
 
 	endIndex := m.topIndex + maxVisible
-	if endIndex > len(tracks) {
-		endIndex = len(tracks)
-	}
+	if endIndex > len(tracks) { endIndex = len(tracks) }
 
 	for i := m.topIndex; i < endIndex; i++ {
 		track := tracks[i]
@@ -394,9 +415,8 @@ func (m Model) renderTracks() string {
 			cursor = ">"
 			style = m.styles.ActiveItem
 		}
-		artist := track.Artist
 		titleWidth := m.width - 25 - 4 - 2 - 3 - 25
-		line := fmt.Sprintf("%s %-*s | %s", cursor, titleWidth, truncate(track.Title, titleWidth), truncate(artist, 20))
+		line := fmt.Sprintf("%s %-*s | %s", cursor, titleWidth, truncate(track.Title, titleWidth), truncate(track.Artist, 20))
 		b.WriteString(style.Render(line))
 		b.WriteString("\n")
 	}
@@ -404,7 +424,11 @@ func (m Model) renderTracks() string {
 }
 
 func (m Model) renderArtists() string {
-	if len(m.artists) == 0 {
+	artists := m.artists
+	if m.searchInput.Value() != "" { artists = m.filteredArtists }
+
+	if len(artists) == 0 {
+		if m.searchInput.Value() != "" { return "No matches found." }
 		return "No artists found. Scan your library first."
 	}
 
@@ -412,11 +436,13 @@ func (m Model) renderArtists() string {
 	b.WriteString(m.styles.Title.Render("Artists"))
 	b.WriteString("\n\n")
 
-	maxVisible := m.height - 3 - 5
+	offset := 5
+	if m.searchInput.Value() != "" { offset = 7 }
+	maxVisible := m.height - 3 - offset
+	if maxVisible <= 0 { return "Terminal too small" }
+
 	endIndex := m.topIndex + maxVisible
-	if endIndex > len(m.artists) {
-		endIndex = len(m.artists)
-	}
+	if endIndex > len(artists) { endIndex = len(artists) }
 
 	for i := m.topIndex; i < endIndex; i++ {
 		cursor := " "
@@ -425,14 +451,18 @@ func (m Model) renderArtists() string {
 			cursor = ">"
 			style = m.styles.ActiveItem
 		}
-		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, m.artists[i])))
+		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, artists[i])))
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
 func (m Model) renderAlbums() string {
-	if len(m.albums) == 0 {
+	albums := m.albums
+	if m.searchInput.Value() != "" { albums = m.filteredAlbums }
+
+	if len(albums) == 0 {
+		if m.searchInput.Value() != "" { return "No matches found." }
 		return "No albums found. Scan your library first."
 	}
 
@@ -440,11 +470,13 @@ func (m Model) renderAlbums() string {
 	b.WriteString(m.styles.Title.Render("Albums"))
 	b.WriteString("\n\n")
 
-	maxVisible := m.height - 3 - 5
+	offset := 5
+	if m.searchInput.Value() != "" { offset = 7 }
+	maxVisible := m.height - 3 - offset
+	if maxVisible <= 0 { return "Terminal too small" }
+
 	endIndex := m.topIndex + maxVisible
-	if endIndex > len(m.albums) {
-		endIndex = len(m.albums)
-	}
+	if endIndex > len(albums) { endIndex = len(albums) }
 
 	for i := m.topIndex; i < endIndex; i++ {
 		cursor := " "
@@ -453,7 +485,7 @@ func (m Model) renderAlbums() string {
 			cursor = ">"
 			style = m.styles.ActiveItem
 		}
-		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, m.albums[i])))
+		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, albums[i])))
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -471,12 +503,9 @@ func (m Model) renderPlayerBar() string {
 
 	if m.current != nil && m.audioEngine != nil && m.audioEngine.Streamer != nil {
 		trackInfo = fmt.Sprintf("%s - %s", m.current.Title, m.current.Artist)
-		
 		pos := m.audioEngine.Streamer.Position()
 		len := m.audioEngine.Streamer.Len()
-		if len > 0 {
-			progress = float64(pos) / float64(len)
-		}
+		if len > 0 { progress = float64(pos) / float64(len) }
 		
 		sr := m.audioEngine.SampleRate
 		currentTime := time.Duration(pos) * time.Second / time.Duration(sr)
@@ -487,27 +516,50 @@ func (m Model) renderPlayerBar() string {
 	}
 
 	width := m.width - 4
-	barWidth := 20
-	filled := int(float64(barWidth) * progress)
-	if filled > barWidth { filled = barWidth }
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	barWidth := 25
+	bar := renderSmoothBar(barWidth, progress)
 
 	visualizer := " ▂▃▅▆▇"
 	if m.audioEngine != nil && m.audioEngine.Ctrl != nil && !m.audioEngine.Ctrl.Paused {
-		// Mock randomization
+		// randomize mock visualizer
 	} else {
 		visualizer = "      "
 	}
 
 	return fmt.Sprintf("%s %s %s [%s] %s | 󰒭 Prev  󰒮 Next  󰓃 Vol", 
-		visualizer, status, truncate(trackInfo, width-60), bar, timeInfo)
+		visualizer, status, truncate(trackInfo, width-65), bar, timeInfo)
+}
+
+func renderSmoothBar(width int, progress float64) string {
+	if progress < 0 { progress = 0 }
+	if progress > 1 { progress = 1 }
+
+	blocks := []string{" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
+	
+	totalValue := progress * float64(width)
+	fullBlocks := int(totalValue)
+	remainder := totalValue - float64(fullBlocks)
+	
+	var bar strings.Builder
+	for i := 0; i < fullBlocks; i++ {
+		bar.WriteString("█")
+	}
+	
+	if fullBlocks < width {
+		blockIdx := int(remainder * 8)
+		bar.WriteString(blocks[blockIdx])
+		
+		for i := fullBlocks + 1; i < width; i++ {
+			bar.WriteString("░")
+		}
+	}
+	
+	return bar.String()
 }
 
 func truncate(s string, l int) string {
 	if len(s) > l {
-		if l > 3 {
-			return s[:l-3] + "..."
-		}
+		if l > 3 { return s[:l-3] + "..." }
 		return s[:l]
 	}
 	return s
