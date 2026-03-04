@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"math"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -132,7 +131,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < count-1 {
 				m.cursor++
 				maxVisible := m.height - 3 - 5
-				if m.isSearching || m.searchInput.Value() != "" {
+				if m.searchInput.Value() != "" {
 					maxVisible -= 2
 				}
 				if m.cursor >= m.topIndex+maxVisible {
@@ -371,10 +370,13 @@ func (m Model) renderSidebar() string {
 		{"󰲸", "Playlists", PlaylistView},
 	}
 
+	activeStyle := m.styles.ActiveItem
+	normalStyle := lipgloss.NewStyle()
+
 	for _, item := range items {
-		style := lipgloss.NewStyle()
+		style := normalStyle
 		if m.mode == item.mode {
-			style = m.styles.ActiveItem
+			style = activeStyle
 		}
 		b.WriteString(style.Render(fmt.Sprintf("%s %s", item.icon, item.name)))
 		b.WriteString("\n")
@@ -433,15 +435,20 @@ func (m Model) renderTracks() string {
 	endIndex := m.topIndex + maxVisible
 	if endIndex > len(tracks) { endIndex = len(tracks) }
 
+	activeStyle := m.styles.ActiveItem
+	normalStyle := lipgloss.NewStyle()
+	titleWidth := m.width - 25 - 4 - 2 - 3 - 25
+	if titleWidth < 10 { titleWidth = 10 }
+
 	for i := m.topIndex; i < endIndex; i++ {
 		track := tracks[i]
 		cursor := " "
-		style := lipgloss.NewStyle()
+		style := normalStyle
 		if i == m.cursor {
 			cursor = ">"
-			style = m.styles.ActiveItem
+			style = activeStyle
 		}
-		titleWidth := m.width - 25 - 4 - 2 - 3 - 25
+		
 		line := fmt.Sprintf("%s %-*s | %s", cursor, titleWidth, truncate(track.Title, titleWidth), truncate(track.Artist, 20))
 		b.WriteString(style.Render(line))
 		b.WriteString("\n")
@@ -470,12 +477,15 @@ func (m Model) renderArtists() string {
 	endIndex := m.topIndex + maxVisible
 	if endIndex > len(artists) { endIndex = len(artists) }
 
+	activeStyle := m.styles.ActiveItem
+	normalStyle := lipgloss.NewStyle()
+
 	for i := m.topIndex; i < endIndex; i++ {
 		cursor := " "
-		style := lipgloss.NewStyle()
+		style := normalStyle
 		if i == m.cursor {
 			cursor = ">"
-			style = m.styles.ActiveItem
+			style = activeStyle
 		}
 		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, artists[i])))
 		b.WriteString("\n")
@@ -504,12 +514,15 @@ func (m Model) renderAlbums() string {
 	endIndex := m.topIndex + maxVisible
 	if endIndex > len(albums) { endIndex = len(albums) }
 
+	activeStyle := m.styles.ActiveItem
+	normalStyle := lipgloss.NewStyle()
+
 	for i := m.topIndex; i < endIndex; i++ {
 		cursor := " "
-		style := lipgloss.NewStyle()
+		style := normalStyle
 		if i == m.cursor {
 			cursor = ">"
-			style = m.styles.ActiveItem
+			style = activeStyle
 		}
 		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, albums[i])))
 		b.WriteString("\n")
@@ -538,12 +551,15 @@ func (m Model) renderPlaylists() string {
 	endIndex := m.topIndex + maxVisible
 	if endIndex > len(p) { endIndex = len(p) }
 
+	activeStyle := m.styles.ActiveItem
+	normalStyle := lipgloss.NewStyle()
+
 	for i := m.topIndex; i < endIndex; i++ {
 		cursor := " "
-		style := lipgloss.NewStyle()
+		style := normalStyle
 		if i == m.cursor {
 			cursor = ">"
-			style = m.styles.ActiveItem
+			style = activeStyle
 		}
 		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, p[i])))
 		b.WriteString("\n")
@@ -595,20 +611,20 @@ func (m Model) renderVisualizer(width int) string {
 		return "      "
 	}
 
-	// Simple visualizer logic
 	bars := []string{" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"}
 	var res strings.Builder
 	
-	// Average samples into buckets
 	bucketSize := len(samples) / width
+	if bucketSize == 0 { bucketSize = 1 }
 	for i := 0; i < width; i++ {
 		sum := 0.0
-		for j := 0; j < bucketSize; j++ {
-			sum += math.Abs(samples[i*bucketSize+j])
+		for j := 0; j < bucketSize && (i*bucketSize+j) < len(samples); j++ {
+			val := samples[i*bucketSize+j]
+			if val < 0 { val = -val }
+			sum += val
 		}
 		avg := sum / float64(bucketSize)
-		// Scale avg to bars length
-		idx := int(avg * 15) // heuristic scaling
+		idx := int(avg * 15)
 		if idx >= len(bars) { idx = len(bars) - 1 }
 		res.WriteString(bars[idx])
 	}
