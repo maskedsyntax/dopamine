@@ -44,6 +44,10 @@ type Model struct {
 	cursor      int
 	topIndex    int // For scrolling
 	current     *library.Track
+	
+	// Player state
+	playingIndex int
+	queue        []library.Track
 
 	scanning bool
 	showHelp bool
@@ -52,7 +56,7 @@ type Model struct {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		tea.Tick(time.Second/10, func(t time.Time) tea.Msg {
+		tea.Tick(time.Second/1, func(t time.Time) tea.Msg {
 			return TickMsg(t)
 		}),
 		textinput.Blink,
@@ -76,7 +80,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter", "esc":
 				m.isSearching = false
 				m.searchInput.Blur()
-				m.searchInput.SetValue("")
 				return m, nil
 			}
 		}
@@ -140,7 +143,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if m.mode == HomeView && len(targetTracks) > 0 {
-				track := targetTracks[m.cursor]
+				m.queue = targetTracks
+				m.playingIndex = m.cursor
+				track := m.queue[m.playingIndex]
+				m.current = &track
+				m.audioEngine.PlayFile(track.Path)
+			}
+		case "n": // Next
+			if len(m.queue) > 0 && m.playingIndex < len(m.queue)-1 {
+				m.playingIndex++
+				track := m.queue[m.playingIndex]
+				m.current = &track
+				m.audioEngine.PlayFile(track.Path)
+			}
+		case "p": // Previous
+			if len(m.queue) > 0 && m.playingIndex > 0 {
+				m.playingIndex--
+				track := m.queue[m.playingIndex]
 				m.current = &track
 				m.audioEngine.PlayFile(track.Path)
 			}
@@ -173,7 +192,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.albums = msg.albums
 		return m, nil
 	case TickMsg:
-		return m, tea.Tick(time.Second/10, func(t time.Time) tea.Msg {
+		// Auto-advance if track finished? 
+		// Beep doesn't easily tell us when a track ends without wrapping it in a custom streamer
+		return m, tea.Tick(time.Second/1, func(t time.Time) tea.Msg {
 			return TickMsg(t)
 		})
 	case tea.WindowSizeMsg:
@@ -262,6 +283,8 @@ func (m Model) renderHelp() string {
   j / ↓        : Move down
   Enter        : Play selected track (Home view)
   Space        : Pause/Resume
+  n            : Next track
+  p            : Previous track
   /            : Search tracks
   s            : Scan Music folder
   1, 2, 3, 4   : Switch views (Home, Artists, Albums, Playlists)
@@ -351,7 +374,6 @@ func (m Model) renderTracks() string {
 	b.WriteString(m.styles.Title.Render(title))
 	b.WriteString("\n\n")
 
-	// Adjust maxVisible if search bar is shown
 	offset := 5
 	if m.isSearching || m.searchInput.Value() != "" {
 		offset = 7
@@ -373,10 +395,7 @@ func (m Model) renderTracks() string {
 			style = m.styles.ActiveItem
 		}
 		artist := track.Artist
-		if artist == "" {
-			artist = "Unknown Artist"
-		}
-		titleWidth := m.width - 25 - 4 - 2 - 3 - 20
+		titleWidth := m.width - 25 - 4 - 2 - 3 - 25
 		line := fmt.Sprintf("%s %-*s | %s", cursor, titleWidth, truncate(track.Title, titleWidth), truncate(artist, 20))
 		b.WriteString(style.Render(line))
 		b.WriteString("\n")
@@ -447,22 +466,41 @@ func (m Model) renderPlayerBar() string {
 	}
 
 	trackInfo := "No track playing"
-	if m.current != nil {
-		artist := m.current.Artist
-		if artist == "" {
-			artist = "Unknown"
+	progress := 0.0
+	timeInfo := "00:00 / 00:00"
+
+	if m.current != nil && m.audioEngine != nil && m.audioEngine.Streamer != nil {
+		trackInfo = fmt.Sprintf("%s - %s", m.current.Title, m.current.Artist)
+		
+		pos := m.audioEngine.Streamer.Position()
+		len := m.audioEngine.Streamer.Len()
+		if len > 0 {
+			progress = float64(pos) / float64(len)
 		}
-		trackInfo = fmt.Sprintf("%s - %s", m.current.Title, artist)
+		
+		sr := m.audioEngine.SampleRate
+		currentTime := time.Duration(pos) * time.Second / time.Duration(sr)
+		totalTime := time.Duration(len) * time.Second / time.Duration(sr)
+		timeInfo = fmt.Sprintf("%02d:%02d / %02d:%02d", 
+			int(currentTime.Minutes()), int(currentTime.Seconds())%60,
+			int(totalTime.Minutes()), int(totalTime.Seconds())%60)
 	}
+
+	width := m.width - 4
+	barWidth := 20
+	filled := int(float64(barWidth) * progress)
+	if filled > barWidth { filled = barWidth }
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
 
 	visualizer := " ▂▃▅▆▇"
 	if m.audioEngine != nil && m.audioEngine.Ctrl != nil && !m.audioEngine.Ctrl.Paused {
-		// Mock visualizer randomization could go here
+		// Mock randomization
 	} else {
 		visualizer = "      "
 	}
 
-	return fmt.Sprintf("%s  %s  %s | 󰒭 Prev  󰒮 Next  󰓃 Volume 80%%", visualizer, status, truncate(trackInfo, m.width-40))
+	return fmt.Sprintf("%s %s %s [%s] %s | 󰒭 Prev  󰒮 Next  󰓃 Vol", 
+		visualizer, status, truncate(trackInfo, width-60), bar, timeInfo)
 }
 
 func truncate(s string, l int) string {
