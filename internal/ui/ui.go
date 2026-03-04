@@ -22,6 +22,16 @@ const (
 	ArtistView
 	AlbumView
 	PlaylistView
+	PlaylistTrackView
+)
+
+type InputMode int
+
+const (
+	NoInput InputMode = iota
+	SearchInput
+	PlaylistNameInput
+	PlaylistSelectInput
 )
 
 type Model struct {
@@ -37,12 +47,13 @@ type Model struct {
 	albums      []string
 	playlists   []string
 	
-	// Search state
-	searchInput      textinput.Model
-	isSearching      bool
-	filteredTracks   []library.Track
-	filteredArtists  []string
-	filteredAlbums   []string
+	// Input state
+	inputMode       InputMode
+	searchInput     textinput.Model
+	playlistInput   textinput.Model
+	filteredTracks  []library.Track
+	filteredArtists []string
+	filteredAlbums  []string
 	filteredPlaylists []string
 	
 	cursor      int
@@ -52,6 +63,10 @@ type Model struct {
 	// Player state
 	playingIndex int
 	queue        []library.Track
+	
+	// Playlist state
+	selectedPlaylist string
+	trackToPlaylist  *library.Track
 
 	scanning bool
 	showHelp bool
@@ -79,17 +94,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var tickCmd tea.Cmd
 
-	// Standard tick command to keep the loop going
 	tickCmd = tea.Tick(time.Millisecond*50, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
 
-	if m.isSearching {
+	if m.inputMode == SearchInput {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			switch msg.String() {
 			case "enter", "esc":
-				m.isSearching = false
+				m.inputMode = NoInput
 				m.searchInput.Blur()
 				return m, tickCmd
 			}
@@ -99,6 +113,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.searchInput, cmd = m.searchInput.Update(msg)
 		m.filterCurrentView()
 		return m, tea.Batch(cmd, tickCmd)
+	}
+
+	if m.inputMode == PlaylistNameInput {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "enter":
+				name := m.playlistInput.Value()
+				if name != "" {
+					m.db.CreatePlaylist(name)
+					m.playlists, _ = m.db.GetPlaylists()
+				}
+				m.inputMode = NoInput
+				m.playlistInput.Blur()
+				m.playlistInput.SetValue("")
+				return m, tickCmd
+			case "esc":
+				m.inputMode = NoInput
+				m.playlistInput.Blur()
+				return m, tickCmd
+			}
+		case TickMsg:
+			return m, tickCmd
+		}
+		m.playlistInput, cmd = m.playlistInput.Update(msg)
+		return m, tea.Batch(cmd, tickCmd)
+	}
+
+	if m.inputMode == PlaylistSelectInput {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "up", "k":
+				if m.cursor > 0 { m.cursor-- }
+			case "down", "j":
+				if m.cursor < len(m.playlists)-1 { m.cursor++ }
+			case "enter":
+				if len(m.playlists) > 0 && m.trackToPlaylist != nil {
+					m.db.AddTrackToPlaylist(m.playlists[m.cursor], m.trackToPlaylist.Path)
+				}
+				m.inputMode = NoInput
+				m.cursor = 0
+				return m, tickCmd
+			case "esc":
+				m.inputMode = NoInput
+				m.cursor = 0
+				return m, tickCmd
+			}
+		case TickMsg:
+			return m, tickCmd
+		}
+		return m, tickCmd
 	}
 
 	switch msg := msg.(type) {
@@ -114,11 +180,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			m.showHelp = true
 		case "/":
-			m.isSearching = true
+			m.inputMode = SearchInput
 			m.searchInput.Focus()
 			m.cursor = 0
 			m.topIndex = 0
 			return m, tea.Batch(textinput.Blink, tickCmd)
+		case "+":
+			m.inputMode = PlaylistNameInput
+			m.playlistInput.Focus()
+			return m, tea.Batch(textinput.Blink, tickCmd)
+		case "a":
+			if m.mode == HomeView && len(m.getCurrentTracks()) > 0 {
+				track := m.getCurrentTracks()[m.cursor]
+				m.trackToPlaylist = &track
+				m.inputMode = PlaylistSelectInput
+				m.cursor = 0
+				return m, tickCmd
+			}
+		case "h": // Seek back
+			m.audioEngine.Seek(-10)
+		case "l": // Seek forward
+			m.audioEngine.Seek(10)
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -131,9 +213,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < count-1 {
 				m.cursor++
 				maxVisible := m.height - 3 - 5
-				if m.searchInput.Value() != "" {
-					maxVisible -= 2
-				}
+				if m.searchInput.Value() != "" { maxVisible -= 2 }
 				if m.cursor >= m.topIndex+maxVisible {
 					m.topIndex = m.cursor - maxVisible + 1
 				}
@@ -155,7 +235,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}, tickCmd)
 			}
 		case "enter":
-			if m.mode == HomeView {
+			if m.mode == HomeView || m.mode == PlaylistTrackView {
 				tracks := m.getCurrentTracks()
 				if len(tracks) > 0 {
 					m.queue = tracks
@@ -164,6 +244,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.current = &track
 					m.audioEngine.PlayFile(track.Path)
 				}
+			} else if m.mode == PlaylistView {
+				if len(m.playlists) > 0 {
+					m.selectedPlaylist = m.playlists[m.cursor]
+					m.mode = PlaylistTrackView
+					m.tracks, _ = m.db.GetPlaylistTracks(m.selectedPlaylist)
+					m.cursor = 0
+					m.topIndex = 0
+				}
+			}
+		case "backspace", "esc":
+			if m.mode == PlaylistTrackView {
+				m.mode = PlaylistView
+				m.cursor = 0
+				m.topIndex = 0
+				m.tracks, _ = m.db.GetAllTracks()
 			}
 		case "n": // Next
 			if len(m.queue) > 0 && m.playingIndex < len(m.queue)-1 {
@@ -186,6 +281,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "1":
 			m.mode = HomeView
 			m.resetNavigation()
+			m.tracks, _ = m.db.GetAllTracks()
 		case "2":
 			m.mode = ArtistView
 			m.resetNavigation()
@@ -221,6 +317,7 @@ func (m *Model) resetNavigation() {
 	m.filteredAlbums = nil
 	m.filteredPlaylists = nil
 	m.searchInput.SetValue("")
+	m.inputMode = NoInput
 }
 
 func (m *Model) filterCurrentView() {
@@ -234,7 +331,7 @@ func (m *Model) filterCurrentView() {
 	}
 
 	switch m.mode {
-	case HomeView:
+	case HomeView, PlaylistTrackView:
 		var targets []string
 		for _, t := range m.tracks {
 			targets = append(targets, fmt.Sprintf("%s %s %s", t.Title, t.Artist, t.Album))
@@ -273,7 +370,7 @@ func (m *Model) filterCurrentView() {
 func (m Model) getItemCount() int {
 	isSearching := m.searchInput.Value() != ""
 	switch m.mode {
-	case HomeView:
+	case HomeView, PlaylistTrackView:
 		if isSearching { return len(m.filteredTracks) }
 		return len(m.tracks)
 	case ArtistView:
@@ -306,6 +403,10 @@ func (m Model) View() string {
 		return m.renderHelp()
 	}
 
+	if m.inputMode == PlaylistSelectInput {
+		return m.renderPlaylistSelect()
+	}
+
 	sidebarHeight := m.height - 3
 
 	sidebar := m.styles.Sidebar.
@@ -327,6 +428,29 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, content, playerBar)
 }
 
+func (m Model) renderPlaylistSelect() string {
+	var b strings.Builder
+	b.WriteString(m.styles.Title.Render("Add to Playlist"))
+	b.WriteString("\n\n")
+	for i, p := range m.playlists {
+		cursor := " "
+		style := lipgloss.NewStyle()
+		if i == m.cursor {
+			cursor = ">"
+			style = m.styles.ActiveItem
+		}
+		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, p)))
+		b.WriteString("\n")
+	}
+	if len(m.playlists) == 0 {
+		b.WriteString("No playlists. Press '+' to create one.")
+	}
+	b.WriteString("\n\n(Enter to select, Esc to cancel)")
+	
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		m.styles.MainView.BorderStyle(lipgloss.RoundedBorder()).Render(b.String()))
+}
+
 func (m Model) renderHelp() string {
 	help := `
   DOPAMINE HELP
@@ -335,18 +459,18 @@ func (m Model) renderHelp() string {
   NAVIGATION
   k / ↑        : Move up
   j / ↓        : Move down
-  Enter        : Play selected track (Home view)
+  Enter        : Play / Open
+  Backspace    : Back
   Space        : Pause/Resume
-  n            : Next track
-  p            : Previous track
+  n / p        : Next / Previous
+  h / l        : Seek -10s / +10s
   /            : Search in current view
   s            : Scan Music folder
-  1, 2, 3, 4   : Switch views (Home, Artists, Albums, Playlists)
+  1, 2, 3, 4   : Switch views
+  +            : New Playlist
+  a            : Add track to playlist
   ?            : Toggle help
   q / Ctrl+C   : Quit
-
-  SEARCH
-  Type to filter items. Press Enter or Esc to finish searching.
 
   Press any key to return...
 `
@@ -375,7 +499,7 @@ func (m Model) renderSidebar() string {
 
 	for _, item := range items {
 		style := normalStyle
-		if m.mode == item.mode {
+		if m.mode == item.mode || (item.mode == PlaylistView && m.mode == PlaylistTrackView) {
 			style = activeStyle
 		}
 		b.WriteString(style.Render(fmt.Sprintf("%s %s", item.icon, item.name)))
@@ -393,13 +517,18 @@ func (m Model) renderMainView() string {
 	}
 
 	var searchBar string
-	if m.isSearching || m.searchInput.Value() != "" {
+	if m.inputMode == SearchInput || m.searchInput.Value() != "" {
 		searchBar = m.styles.ActiveItem.Render(" ") + m.searchInput.View() + "\n\n"
+	}
+	if m.inputMode == PlaylistNameInput {
+		searchBar = m.styles.ActiveItem.Render("󰲸 New Playlist: ") + m.playlistInput.View() + "\n\n"
 	}
 
 	switch m.mode {
-	case HomeView:
-		return searchBar + m.renderTracks()
+	case HomeView, PlaylistTrackView:
+		title := "All Tracks"
+		if m.mode == PlaylistTrackView { title = "Playlist: " + m.selectedPlaylist }
+		return searchBar + m.renderTracks(title)
 	case ArtistView:
 		return searchBar + m.renderArtists()
 	case AlbumView:
@@ -411,16 +540,15 @@ func (m Model) renderMainView() string {
 	}
 }
 
-func (m Model) renderTracks() string {
+func (m Model) renderTracks(title string) string {
 	tracks := m.getCurrentTracks()
-	title := "All Tracks"
 	if m.searchInput.Value() != "" {
 		title = fmt.Sprintf("Search Results (%d)", len(tracks))
 	}
 
 	if len(tracks) == 0 {
 		if m.searchInput.Value() != "" { return "No matches found." }
-		return "No tracks found.\n\nPress 's' to scan your Music folder.\nPress '?' for help."
+		return "No tracks found."
 	}
 
 	var b strings.Builder
@@ -428,7 +556,7 @@ func (m Model) renderTracks() string {
 	b.WriteString("\n\n")
 
 	offset := 5
-	if m.searchInput.Value() != "" { offset = 7 }
+	if m.inputMode != NoInput || m.searchInput.Value() != "" { offset = 7 }
 	maxVisible := m.height - 3 - offset
 	if maxVisible <= 0 { return "Terminal too small" }
 
@@ -462,7 +590,7 @@ func (m Model) renderArtists() string {
 
 	if len(artists) == 0 {
 		if m.searchInput.Value() != "" { return "No matches found." }
-		return "No artists found. Scan your library first."
+		return "No artists found."
 	}
 
 	var b strings.Builder
@@ -470,7 +598,7 @@ func (m Model) renderArtists() string {
 	b.WriteString("\n\n")
 
 	offset := 5
-	if m.searchInput.Value() != "" { offset = 7 }
+	if m.inputMode != NoInput || m.searchInput.Value() != "" { offset = 7 }
 	maxVisible := m.height - 3 - offset
 	if maxVisible <= 0 { return "Terminal too small" }
 
@@ -499,7 +627,7 @@ func (m Model) renderAlbums() string {
 
 	if len(albums) == 0 {
 		if m.searchInput.Value() != "" { return "No matches found." }
-		return "No albums found. Scan your library first."
+		return "No albums found."
 	}
 
 	var b strings.Builder
@@ -507,7 +635,7 @@ func (m Model) renderAlbums() string {
 	b.WriteString("\n\n")
 
 	offset := 5
-	if m.searchInput.Value() != "" { offset = 7 }
+	if m.inputMode != NoInput || m.searchInput.Value() != "" { offset = 7 }
 	maxVisible := m.height - 3 - offset
 	if maxVisible <= 0 { return "Terminal too small" }
 
@@ -536,7 +664,7 @@ func (m Model) renderPlaylists() string {
 
 	if len(p) == 0 {
 		if m.searchInput.Value() != "" { return "No matches found." }
-		return "No playlists found. Create one with '+' (not yet implemented)."
+		return "No playlists found. Press '+' to create one."
 	}
 
 	var b strings.Builder
@@ -544,7 +672,7 @@ func (m Model) renderPlaylists() string {
 	b.WriteString("\n\n")
 
 	offset := 5
-	if m.searchInput.Value() != "" { offset = 7 }
+	if m.inputMode != NoInput || m.searchInput.Value() != "" { offset = 7 }
 	maxVisible := m.height - 3 - offset
 	if maxVisible <= 0 { return "Terminal too small" }
 
@@ -602,7 +730,7 @@ func (m Model) renderPlayerBar() string {
 }
 
 func (m Model) renderVisualizer(width int) string {
-	if m.audioEngine == nil || m.audioEngine.Ctrl == nil || m.audioEngine.Ctrl.Paused {
+	if m.audioEngine == nil || m.audioEngine.Ctrl != nil && m.audioEngine.Ctrl.Paused {
 		return "      "
 	}
 	

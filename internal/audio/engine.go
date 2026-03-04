@@ -54,7 +54,7 @@ func (e *Engine) PlayFile(path string) error {
 
 	e.Format = format
 	
-	// Resample to engine's sample rate to ensure correct playback speed
+	// Resample to engine's sample rate
 	resampled := beep.Resample(4, format.SampleRate, e.SampleRate, streamer)
 	
 	// Wrap with visualizer
@@ -74,6 +74,27 @@ func (e *Engine) TogglePause() {
 		speaker.Lock()
 		e.Ctrl.Paused = !e.Ctrl.Paused
 		speaker.Unlock()
+	}
+}
+
+func (e *Engine) Seek(seconds float64) {
+	if e.Streamer == nil {
+		return
+	}
+	
+	speaker.Lock()
+	defer speaker.Unlock()
+	
+	newPos := e.Streamer.Position() + e.Format.SampleRate.N(time.Duration(seconds*float64(time.Second)))
+	if newPos < 0 {
+		newPos = 0
+	}
+	if newPos >= e.Streamer.Len() {
+		return // Don't seek past end
+	}
+	
+	if err := e.Streamer.Seek(newPos); err != nil {
+		// Handle error?
 	}
 }
 

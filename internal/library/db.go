@@ -118,6 +118,50 @@ func (db *DB) GetAlbums() ([]string, error) {
 	return albums, nil
 }
 
+func (db *DB) CreatePlaylist(name string) error {
+	_, err := db.conn.Exec("INSERT OR IGNORE INTO playlists (name) VALUES (?)", name)
+	return err
+}
+
+func (db *DB) AddTrackToPlaylist(playlistName string, trackPath string) error {
+	var playlistID, trackID int
+	err := db.conn.QueryRow("SELECT id FROM playlists WHERE name = ?", playlistName).Scan(&playlistID)
+	if err != nil {
+		return err
+	}
+	err = db.conn.QueryRow("SELECT id FROM tracks WHERE path = ?", trackPath).Scan(&trackID)
+	if err != nil {
+		return err
+	}
+	_, err = db.conn.Exec("INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id) VALUES (?, ?)", playlistID, trackID)
+	return err
+}
+
+func (db *DB) GetPlaylistTracks(name string) ([]Track, error) {
+	rows, err := db.conn.Query(`
+		SELECT t.id, t.path, t.title, t.artist, t.album, t.duration 
+		FROM tracks t
+		JOIN playlist_tracks pt ON t.id = pt.track_id
+		JOIN playlists p ON p.id = pt.playlist_id
+		WHERE p.name = ?
+	`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tracks []Track
+	for rows.Next() {
+		var t Track
+		err := rows.Scan(&t.ID, &t.Path, &t.Title, &t.Artist, &t.Album, &t.Duration)
+		if err != nil {
+			return nil, err
+		}
+		tracks = append(tracks, t)
+	}
+	return tracks, nil
+}
+
 func (db *DB) GetPlaylists() ([]string, error) {
 	rows, err := db.conn.Query("SELECT name FROM playlists ORDER BY name ASC")
 	if err != nil {

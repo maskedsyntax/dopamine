@@ -46,9 +46,15 @@ func InitialModelWithDeps(cfg Config) (Model, error) {
 	ti.CharLimit = 156
 	ti.Width = 20
 
+	pi := textinput.New()
+	pi.Placeholder = "Playlist name..."
+	pi.CharLimit = 50
+	pi.Width = 30
+
 	return Model{
 		styles:      GetStyles(DefaultTheme),
 		mode:        HomeView,
+		inputMode:   NoInput,
 		audioEngine: engine,
 		db:          db,
 		tracks:      tracks,
@@ -56,5 +62,6 @@ func InitialModelWithDeps(cfg Config) (Model, error) {
 		albums:      albums,
 		playlists:   playlists,
 		searchInput: ti,
+		playlistInput: pi,
 	}, nil
 }
