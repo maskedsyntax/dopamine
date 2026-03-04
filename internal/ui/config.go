@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/maskedsyntax/dopamine/internal/audio"
 	"github.com/maskedsyntax/dopamine/internal/library"
 )
@@ -36,6 +37,13 @@ func InitialModelWithDeps(cfg Config) (Model, error) {
 	}
 
 	tracks, _ := db.GetAllTracks()
+	artists, _ := db.GetArtists()
+	albums, _ := db.GetAlbums()
+
+	ti := textinput.New()
+	ti.Placeholder = "Search tracks..."
+	ti.CharLimit = 156
+	ti.Width = 20
 
 	return Model{
 		styles:      GetStyles(DefaultTheme),
@@ -43,5 +51,8 @@ func InitialModelWithDeps(cfg Config) (Model, error) {
 		audioEngine: engine,
 		db:          db,
 		tracks:      tracks,
+		artists:     artists,
+		albums:      albums,
+		searchInput: ti,
 	}, nil
 }

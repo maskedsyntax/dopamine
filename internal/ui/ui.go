@@ -7,10 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/maskedsyntax/dopamine/internal/audio"
 	"github.com/maskedsyntax/dopamine/internal/library"
+	"github.com/sahilm/fuzzy"
 )
 
 type ViewMode int
@@ -34,6 +36,11 @@ type Model struct {
 	artists     []string
 	albums      []string
 	
+	// Search state
+	searchInput    textinput.Model
+	isSearching    bool
+	filteredTracks []library.Track
+	
 	cursor      int
 	topIndex    int // For scrolling
 	current     *library.Track
@@ -44,9 +51,12 @@ type Model struct {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Tick(time.Second/10, func(t time.Time) tea.Msg {
-		return TickMsg(t)
-	})
+	return tea.Batch(
+		tea.Tick(time.Second/10, func(t time.Time) tea.Msg {
+			return TickMsg(t)
+		}),
+		textinput.Blink,
+	)
 }
 
 type TickMsg time.Time
@@ -57,6 +67,24 @@ type ScanCompleteMsg struct {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	if m.isSearching {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "enter", "esc":
+				m.isSearching = false
+				m.searchInput.Blur()
+				m.searchInput.SetValue("")
+				return m, nil
+			}
+		}
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		m.filterTracks()
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.showHelp {
@@ -69,6 +97,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "?":
 			m.showHelp = true
+		case "/":
+			m.isSearching = true
+			m.searchInput.Focus()
+			m.cursor = 0
+			m.topIndex = 0
+			return m, textinput.Blink
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -100,8 +134,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "enter":
-			if m.mode == HomeView && len(m.tracks) > 0 {
-				track := m.tracks[m.cursor]
+			targetTracks := m.tracks
+			if len(m.filteredTracks) > 0 || m.searchInput.Value() != "" {
+				targetTracks = m.filteredTracks
+			}
+
+			if m.mode == HomeView && len(targetTracks) > 0 {
+				track := targetTracks[m.cursor]
 				m.current = &track
 				m.audioEngine.PlayFile(track.Path)
 			}
@@ -113,6 +152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = HomeView
 			m.cursor = 0
 			m.topIndex = 0
+			m.filteredTracks = nil
 		case "2":
 			m.mode = ArtistView
 			m.cursor = 0
@@ -142,7 +182,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) filterTracks() {
+	query := m.searchInput.Value()
+	if query == "" {
+		m.filteredTracks = nil
+		return
+	}
+
+	var targets []string
+	for _, t := range m.tracks {
+		targets = append(targets, fmt.Sprintf("%s %s %s", t.Title, t.Artist, t.Album))
+	}
+
+	matches := fuzzy.Find(query, targets)
+	m.filteredTracks = make([]library.Track, len(matches))
+	for i, match := range matches {
+		m.filteredTracks[i] = m.tracks[match.Index]
+	}
+	
+	if m.cursor >= len(m.filteredTracks) {
+		m.cursor = 0
+		m.topIndex = 0
+	}
+}
+
 func (m Model) getItemCount() int {
+	if m.mode == HomeView && (len(m.filteredTracks) > 0 || m.searchInput.Value() != "") {
+		return len(m.filteredTracks)
+	}
 	switch m.mode {
 	case HomeView:
 		return len(m.tracks)
@@ -195,10 +262,14 @@ func (m Model) renderHelp() string {
   j / ↓        : Move down
   Enter        : Play selected track (Home view)
   Space        : Pause/Resume
+  /            : Search tracks
   s            : Scan Music folder
   1, 2, 3, 4   : Switch views (Home, Artists, Albums, Playlists)
   ?            : Toggle help
   q / Ctrl+C   : Quit
+
+  SEARCH
+  Type to filter tracks. Press Enter or Esc to finish searching.
 
   Press any key to return...
 `
@@ -241,9 +312,14 @@ func (m Model) renderMainView() string {
 		return "Scanning library... please wait."
 	}
 
+	var searchBar string
+	if m.isSearching || m.searchInput.Value() != "" {
+		searchBar = m.styles.ActiveItem.Render(" ") + m.searchInput.View() + "\n\n"
+	}
+
 	switch m.mode {
 	case HomeView:
-		return m.renderTracks()
+		return searchBar + m.renderTracks()
 	case ArtistView:
 		return m.renderArtists()
 	case AlbumView:
@@ -256,22 +332,40 @@ func (m Model) renderMainView() string {
 }
 
 func (m Model) renderTracks() string {
-	if len(m.tracks) == 0 {
+	tracks := m.tracks
+	title := "All Tracks"
+	
+	if len(m.filteredTracks) > 0 || m.searchInput.Value() != "" {
+		tracks = m.filteredTracks
+		title = fmt.Sprintf("Search Results (%d)", len(tracks))
+	}
+
+	if len(tracks) == 0 {
+		if m.searchInput.Value() != "" {
+			return "No matches found."
+		}
 		return "No tracks found.\n\nPress 's' to scan your Music folder.\nPress '?' for help."
 	}
 
 	var b strings.Builder
-	b.WriteString(m.styles.Title.Render("All Tracks"))
+	b.WriteString(m.styles.Title.Render(title))
 	b.WriteString("\n\n")
 
-	maxVisible := m.height - 3 - 5
+	// Adjust maxVisible if search bar is shown
+	offset := 5
+	if m.isSearching || m.searchInput.Value() != "" {
+		offset = 7
+	}
+	maxVisible := m.height - 3 - offset
+	if maxVisible <= 0 { return "Terminal too small" }
+
 	endIndex := m.topIndex + maxVisible
-	if endIndex > len(m.tracks) {
-		endIndex = len(m.tracks)
+	if endIndex > len(tracks) {
+		endIndex = len(tracks)
 	}
 
 	for i := m.topIndex; i < endIndex; i++ {
-		track := m.tracks[i]
+		track := tracks[i]
 		cursor := " "
 		style := lipgloss.NewStyle()
 		if i == m.cursor {
