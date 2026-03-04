@@ -6,6 +6,7 @@ import (
 	"strings"
 	"os/exec"
 	"encoding/json"
+	"fmt"
 
 	"github.com/bogem/id3v2/v2"
 	"github.com/dhowden/tag"
@@ -20,6 +21,9 @@ func NewScanner(db *DB) *Scanner {
 }
 
 func (s *Scanner) ScanDirectory(root string) error {
+	// Track seen songs to avoid duplicates in the same scan
+	seen := make(map[string]bool)
+
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -34,13 +38,21 @@ func (s *Scanner) ScanDirectory(root string) error {
 				// Final fallback
 				fileName := filepath.Base(path)
 				fileName = strings.TrimSuffix(fileName, filepath.Ext(fileName))
-				return s.db.AddTrack(Track{
+				track = Track{
 					Path:   path,
 					Title:  fileName,
 					Artist: "Unknown Artist",
 					Album:  "Unknown Album",
-				})
+				}
 			}
+
+			// Duplicate detection: Use Title + Artist as a unique key
+			key := strings.ToLower(fmt.Sprintf("%s|%s", track.Title, track.Artist))
+			if seen[key] {
+				return nil // Skip this file, we already found a version of this song
+			}
+			seen[key] = true
+
 			return s.db.AddTrack(track)
 		}
 		return nil
@@ -52,13 +64,12 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 	fileName := filepath.Base(path)
 	fileName = strings.TrimSuffix(fileName, ext)
 	
-	// Initial empty values
 	var title, artist, album string
 
-	// 1. Try FFPROBE first as it is the most reliable
+	// 1. Try FFPROBE first
 	title, artist, album, _ = extractWithFFProbe(path)
 
-	// 2. Try our manual WAV parser for RIFF INFO if still missing
+	// 2. Try manual WAV parser
 	if ext == ".wav" && (title == "" || artist == "") {
 		t, a, al, err := ExtractWavMetadata(path)
 		if err == nil {
@@ -68,7 +79,7 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 		}
 	}
 
-	// 3. Try standard Go libraries if still missing
+	// 3. Try Go libraries
 	if title == "" || artist == "" {
 		if ext == ".mp3" {
 			t, err := id3v2.Open(path, id3v2.Options{Parse: true})
@@ -95,15 +106,13 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 		}
 	}
 
-	// 4. Heuristics only as a last resort
+	// 4. Heuristics
 	if artist == "" || artist == "Unknown Artist" {
-		// Try filename dash heuristic
 		if strings.Contains(fileName, " - ") {
 			parts := strings.SplitN(fileName, " - ", 2)
 			artist = strings.TrimSpace(parts[0])
 			title = strings.TrimSpace(parts[1])
 		} else {
-			// Try folder name as artist ONLY if it looks like a real name
 			parentDir := filepath.Base(filepath.Dir(path))
 			if parentDir != "Music" && parentDir != "Liked Music" && parentDir != "Downloads" && parentDir != "." && parentDir != "new" && parentDir != "check" {
 				artist = parentDir
@@ -113,12 +122,8 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 		}
 	}
 
-	if title == "" {
-		title = fileName
-	}
-	if album == "" {
-		album = "Unknown Album"
-	}
+	if title == "" { title = fileName }
+	if album == "" { album = "Unknown Album" }
 
 	return Track{
 		Path:   path,
@@ -146,7 +151,6 @@ func extractWithFFProbe(path string) (title, artist, album string, err error) {
 	}
 
 	tags := data.Format.Tags
-	// ffprobe tags can be lowercase or uppercase depending on encoder
 	for k, v := range tags {
 		lowerK := strings.ToLower(k)
 		switch lowerK {

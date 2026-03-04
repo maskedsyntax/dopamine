@@ -52,6 +52,11 @@ func NewDB(path string) (*DB, error) {
 	return &DB{conn: conn}, nil
 }
 
+func (db *DB) ClearTracks() error {
+	_, err := db.conn.Exec("DELETE FROM tracks")
+	return err
+}
+
 func (db *DB) AddTrack(t Track) error {
 	_, err := db.conn.Exec(`
 		INSERT OR REPLACE INTO tracks (path, title, artist, album, duration)

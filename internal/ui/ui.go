@@ -143,6 +143,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.scanning {
 				m.scanning = true
 				return m, tea.Batch(func() tea.Msg {
+					m.db.ClearTracks()
 					scanner := library.NewScanner(m.db)
 					home, _ := os.UserHomeDir()
 					musicDir := filepath.Join(home, "Music")
