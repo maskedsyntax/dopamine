@@ -777,8 +777,8 @@ func (m Model) renderPlayerBar() string {
 }
 
 func (m Model) renderVisualizer(width int) string {
-	if m.audioEngine == nil || m.audioEngine.Ctrl == nil && m.audioEngine.Ctrl.Paused {
-		return "      "
+	if m.audioEngine == nil || m.audioEngine.Ctrl == nil || m.audioEngine.Ctrl.Paused {
+		return strings.Repeat(" ", width)
 	}
 	
 	samples := m.audioEngine.GetSamples()
