@@ -31,6 +31,9 @@ type Model struct {
 	audioEngine *audio.Engine
 	db          *library.DB
 	tracks      []library.Track
+	artists     []string
+	albums      []string
+	
 	cursor      int
 	topIndex    int // For scrolling
 	current     *library.Track
@@ -47,7 +50,11 @@ func (m Model) Init() tea.Cmd {
 }
 
 type TickMsg time.Time
-type ScanCompleteMsg []library.Track
+type ScanCompleteMsg struct {
+	tracks  []library.Track
+	artists []string
+	albums  []string
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -70,9 +77,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "down", "j":
-			if m.cursor < len(m.tracks)-1 {
+			count := m.getItemCount()
+			if m.cursor < count-1 {
 				m.cursor++
-				maxVisible := m.height - 3 - 5 // 3 for player, 5 for header/padding
+				maxVisible := m.height - 3 - 5
 				if m.cursor >= m.topIndex+maxVisible {
 					m.topIndex = m.cursor - maxVisible + 1
 				}
@@ -86,11 +94,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					musicDir := filepath.Join(home, "Music")
 					scanner.ScanDirectory(musicDir)
 					tracks, _ := m.db.GetAllTracks()
-					return ScanCompleteMsg(tracks)
+					artists, _ := m.db.GetArtists()
+					albums, _ := m.db.GetAlbums()
+					return ScanCompleteMsg{tracks, artists, albums}
 				}
 			}
 		case "enter":
-			if len(m.tracks) > 0 && m.audioEngine != nil {
+			if m.mode == HomeView && len(m.tracks) > 0 {
 				track := m.tracks[m.cursor]
 				m.current = &track
 				m.audioEngine.PlayFile(track.Path)
@@ -101,16 +111,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "1":
 			m.mode = HomeView
+			m.cursor = 0
+			m.topIndex = 0
 		case "2":
 			m.mode = ArtistView
+			m.cursor = 0
+			m.topIndex = 0
 		case "3":
 			m.mode = AlbumView
+			m.cursor = 0
+			m.topIndex = 0
 		case "4":
 			m.mode = PlaylistView
+			m.cursor = 0
+			m.topIndex = 0
 		}
 	case ScanCompleteMsg:
 		m.scanning = false
-		m.tracks = msg
+		m.tracks = msg.tracks
+		m.artists = msg.artists
+		m.albums = msg.albums
 		return m, nil
 	case TickMsg:
 		return m, tea.Tick(time.Second/10, func(t time.Time) tea.Msg {
@@ -120,6 +140,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 	}
 	return m, nil
+}
+
+func (m Model) getItemCount() int {
+	switch m.mode {
+	case HomeView:
+		return len(m.tracks)
+	case ArtistView:
+		return len(m.artists)
+	case AlbumView:
+		return len(m.albums)
+	default:
+		return 0
+	}
 }
 
 func (m Model) View() string {
@@ -160,7 +193,7 @@ func (m Model) renderHelp() string {
   NAVIGATION
   k / ↑        : Move up
   j / ↓        : Move down
-  Enter        : Play selected track
+  Enter        : Play selected track (Home view)
   Space        : Pause/Resume
   s            : Scan Music folder
   1, 2, 3, 4   : Switch views (Home, Artists, Albums, Playlists)
@@ -208,6 +241,21 @@ func (m Model) renderMainView() string {
 		return "Scanning library... please wait."
 	}
 
+	switch m.mode {
+	case HomeView:
+		return m.renderTracks()
+	case ArtistView:
+		return m.renderArtists()
+	case AlbumView:
+		return m.renderAlbums()
+	case PlaylistView:
+		return "Playlists view coming soon..."
+	default:
+		return ""
+	}
+}
+
+func (m Model) renderTracks() string {
 	if len(m.tracks) == 0 {
 		return "No tracks found.\n\nPress 's' to scan your Music folder.\nPress '?' for help."
 	}
@@ -216,11 +264,7 @@ func (m Model) renderMainView() string {
 	b.WriteString(m.styles.Title.Render("All Tracks"))
 	b.WriteString("\n\n")
 
-	maxVisible := m.height - 3 - 5 // sidebarHeight - title - padding
-	if maxVisible <= 0 {
-		return "Terminal too small"
-	}
-
+	maxVisible := m.height - 3 - 5
 	endIndex := m.topIndex + maxVisible
 	if endIndex > len(m.tracks) {
 		endIndex = len(m.tracks)
@@ -234,24 +278,71 @@ func (m Model) renderMainView() string {
 			cursor = ">"
 			style = m.styles.ActiveItem
 		}
-
 		artist := track.Artist
 		if artist == "" {
 			artist = "Unknown Artist"
 		}
-
-		// Calculate available width for title
-		// Total width - sidebar(25) - padding(4) - cursor(2) - separator(3) - artist(20)
 		titleWidth := m.width - 25 - 4 - 2 - 3 - 20
-		if titleWidth < 10 {
-			titleWidth = 10
-		}
-
 		line := fmt.Sprintf("%s %-*s | %s", cursor, titleWidth, truncate(track.Title, titleWidth), truncate(artist, 20))
 		b.WriteString(style.Render(line))
 		b.WriteString("\n")
 	}
+	return b.String()
+}
 
+func (m Model) renderArtists() string {
+	if len(m.artists) == 0 {
+		return "No artists found. Scan your library first."
+	}
+
+	var b strings.Builder
+	b.WriteString(m.styles.Title.Render("Artists"))
+	b.WriteString("\n\n")
+
+	maxVisible := m.height - 3 - 5
+	endIndex := m.topIndex + maxVisible
+	if endIndex > len(m.artists) {
+		endIndex = len(m.artists)
+	}
+
+	for i := m.topIndex; i < endIndex; i++ {
+		cursor := " "
+		style := lipgloss.NewStyle()
+		if i == m.cursor {
+			cursor = ">"
+			style = m.styles.ActiveItem
+		}
+		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, m.artists[i])))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m Model) renderAlbums() string {
+	if len(m.albums) == 0 {
+		return "No albums found. Scan your library first."
+	}
+
+	var b strings.Builder
+	b.WriteString(m.styles.Title.Render("Albums"))
+	b.WriteString("\n\n")
+
+	maxVisible := m.height - 3 - 5
+	endIndex := m.topIndex + maxVisible
+	if endIndex > len(m.albums) {
+		endIndex = len(m.albums)
+	}
+
+	for i := m.topIndex; i < endIndex; i++ {
+		cursor := " "
+		style := lipgloss.NewStyle()
+		if i == m.cursor {
+			cursor = ">"
+			style = m.styles.ActiveItem
+		}
+		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, m.albums[i])))
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 
@@ -270,10 +361,9 @@ func (m Model) renderPlayerBar() string {
 		trackInfo = fmt.Sprintf("%s - %s", m.current.Title, artist)
 	}
 
-	// Simple visualizer mock
 	visualizer := " ▂▃▅▆▇"
 	if m.audioEngine != nil && m.audioEngine.Ctrl != nil && !m.audioEngine.Ctrl.Paused {
-		// randomize visualizer slightly based on time?
+		// Mock visualizer randomization could go here
 	} else {
 		visualizer = "      "
 	}

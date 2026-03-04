@@ -67,3 +67,37 @@ func (db *DB) GetAllTracks() ([]Track, error) {
 	}
 	return tracks, nil
 }
+
+func (db *DB) GetArtists() ([]string, error) {
+	rows, err := db.conn.Query("SELECT DISTINCT artist FROM tracks WHERE artist != '' ORDER BY artist ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var artists []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err == nil {
+			artists = append(artists, a)
+		}
+	}
+	return artists, nil
+}
+
+func (db *DB) GetAlbums() ([]string, error) {
+	rows, err := db.conn.Query("SELECT DISTINCT album FROM tracks WHERE album != '' ORDER BY album ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var albums []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err == nil {
+			albums = append(albums, a)
+		}
+	}
+	return albums, nil
+}
