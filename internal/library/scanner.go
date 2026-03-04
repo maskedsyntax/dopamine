@@ -44,20 +44,28 @@ func (s *Scanner) extractMetadata(path string) (Track, error) {
 	}
 	defer f.Close()
 
+	title := filepath.Base(path)
+	artist := "Unknown Artist"
+	album := "Unknown Album"
+
 	m, err := tag.ReadFrom(f)
-	if err != nil {
-		return Track{
-			Path:  path,
-			Title: filepath.Base(path),
-		}, nil
+	if err == nil {
+		if t := m.Title(); t != "" {
+			title = t
+		}
+		if a := m.Artist(); a != "" {
+			artist = a
+		}
+		if al := m.Album(); al != "" {
+			album = al
+		}
 	}
 
 	return Track{
 		Path:   path,
-		Title:  m.Title(),
-		Artist: m.Artist(),
-		Album:  m.Album(),
-		// Duration would need another library or more complex tag reading
+		Title:  title,
+		Artist: artist,
+		Album:  album,
 	}, nil
 }
 

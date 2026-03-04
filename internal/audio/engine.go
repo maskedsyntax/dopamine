@@ -38,7 +38,7 @@ func (e *Engine) PlayFile(path string) error {
 	var streamer beep.StreamSeekCloser
 	var format beep.Format
 
-	// Basic format detection by extension for now
+	// Basic format detection by extension
 	if endsWith(path, ".mp3") {
 		streamer, format, err = mp3.Decode(f)
 	} else if endsWith(path, ".flac") {
@@ -51,9 +51,13 @@ func (e *Engine) PlayFile(path string) error {
 		return err
 	}
 
-	e.Streamer = streamer
 	e.Format = format
-	e.Ctrl = &beep.Ctrl{Streamer: streamer, Paused: false}
+	
+	// Resample to engine's sample rate to ensure correct playback speed
+	resampled := beep.Resample(4, format.SampleRate, e.SampleRate, streamer)
+	
+	e.Streamer = streamer // Note: we close the original streamer later
+	e.Ctrl = &beep.Ctrl{Streamer: resampled, Paused: false}
 
 	speaker.Clear()
 	speaker.Play(e.Ctrl)
