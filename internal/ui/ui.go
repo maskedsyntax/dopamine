@@ -98,6 +98,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return TickMsg(t)
 	})
 
+	// Handle Modal Inputs first
 	if m.inputMode == SearchInput {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
@@ -167,6 +168,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd
 	}
 
+	// Main App Interaction
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.showHelp {
@@ -182,24 +184,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.inputMode = SearchInput
 			m.searchInput.Focus()
-			m.cursor = 0
-			m.topIndex = 0
+			// Keep existing filter if any, or reset if desired
 			return m, tea.Batch(textinput.Blink, tickCmd)
+		case "backspace":
+			// If we have a search query, backspace opens search again to edit
+			if m.searchInput.Value() != "" {
+				m.inputMode = SearchInput
+				m.searchInput.Focus()
+				return m, tickCmd
+			}
+			// Otherwise handle view navigation
+			if m.mode == PlaylistTrackView {
+				m.mode = PlaylistView
+				m.resetNavigation()
+				return m, tickCmd
+			}
+		case "esc":
+			if m.searchInput.Value() != "" {
+				m.resetNavigation()
+				return m, tickCmd
+			}
+			if m.mode == PlaylistTrackView {
+				m.mode = PlaylistView
+				m.resetNavigation()
+				return m, tickCmd
+			}
 		case "+":
 			m.inputMode = PlaylistNameInput
 			m.playlistInput.Focus()
 			return m, tea.Batch(textinput.Blink, tickCmd)
 		case "a":
-			if m.mode == HomeView && len(m.getCurrentTracks()) > 0 {
-				track := m.getCurrentTracks()[m.cursor]
+			tracks := m.getCurrentTracks()
+			if len(tracks) > 0 && m.cursor < len(tracks) {
+				track := tracks[m.cursor]
 				m.trackToPlaylist = &track
 				m.inputMode = PlaylistSelectInput
 				m.cursor = 0
 				return m, tickCmd
 			}
-		case "h": // Seek back
+		case "h":
 			m.audioEngine.Seek(-10)
-		case "l": // Seek forward
+		case "l":
 			m.audioEngine.Seek(10)
 		case "up", "k":
 			if m.cursor > 0 {
@@ -212,8 +237,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			count := m.getItemCount()
 			if m.cursor < count-1 {
 				m.cursor++
-				maxVisible := m.height - 3 - 5
-				if m.searchInput.Value() != "" { maxVisible -= 2 }
+				maxVisible := m.getMaxVisibleItems()
 				if m.cursor >= m.topIndex+maxVisible {
 					m.topIndex = m.cursor - maxVisible + 1
 				}
@@ -237,7 +261,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.mode == HomeView || m.mode == PlaylistTrackView {
 				tracks := m.getCurrentTracks()
-				if len(tracks) > 0 {
+				if len(tracks) > 0 && m.cursor < len(tracks) {
 					m.queue = tracks
 					m.playingIndex = m.cursor
 					track := m.queue[m.playingIndex]
@@ -245,29 +269,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.audioEngine.PlayFile(track.Path)
 				}
 			} else if m.mode == PlaylistView {
-				if len(m.playlists) > 0 {
-					m.selectedPlaylist = m.playlists[m.cursor]
+				playlists := m.getCurrentPlaylists()
+				if len(playlists) > 0 && m.cursor < len(playlists) {
+					m.selectedPlaylist = playlists[m.cursor]
 					m.mode = PlaylistTrackView
 					m.tracks, _ = m.db.GetPlaylistTracks(m.selectedPlaylist)
-					m.cursor = 0
-					m.topIndex = 0
+					m.resetNavigation()
 				}
 			}
-		case "backspace", "esc":
-			if m.mode == PlaylistTrackView {
-				m.mode = PlaylistView
-				m.cursor = 0
-				m.topIndex = 0
-				m.tracks, _ = m.db.GetAllTracks()
-			}
-		case "n": // Next
+		case "n":
 			if len(m.queue) > 0 && m.playingIndex < len(m.queue)-1 {
 				m.playingIndex++
 				track := m.queue[m.playingIndex]
 				m.current = &track
 				m.audioEngine.PlayFile(track.Path)
 			}
-		case "p": // Previous
+		case "p":
 			if len(m.queue) > 0 && m.playingIndex > 0 {
 				m.playingIndex--
 				track := m.queue[m.playingIndex]
@@ -387,11 +404,29 @@ func (m Model) getItemCount() int {
 	}
 }
 
+func (m Model) getMaxVisibleItems() int {
+	// sidebarHeight(m.height-3) - title(1) - spacing(1) - searchBar(3)
+	offset := 5
+	if m.inputMode == SearchInput || m.searchInput.Value() != "" || m.inputMode == PlaylistNameInput {
+		offset = 8
+	}
+	v := m.height - 3 - offset
+	if v <= 0 { return 1 }
+	return v
+}
+
 func (m Model) getCurrentTracks() []library.Track {
 	if m.searchInput.Value() != "" {
 		return m.filteredTracks
 	}
 	return m.tracks
+}
+
+func (m Model) getCurrentPlaylists() []string {
+	if m.searchInput.Value() != "" {
+		return m.filteredPlaylists
+	}
+	return m.playlists
 }
 
 func (m Model) View() string {
@@ -434,7 +469,7 @@ func (m Model) renderPlaylistSelect() string {
 	b.WriteString("\n\n")
 	for i, p := range m.playlists {
 		cursor := " "
-		style := lipgloss.NewStyle()
+		style := m.styles.InactiveItem
 		if i == m.cursor {
 			cursor = ">"
 			style = m.styles.ActiveItem
@@ -443,39 +478,47 @@ func (m Model) renderPlaylistSelect() string {
 		b.WriteString("\n")
 	}
 	if len(m.playlists) == 0 {
-		b.WriteString("No playlists. Press '+' to create one.")
+		b.WriteString(m.styles.HelpDesc.Render("No playlists. Press '+' to create one."))
 	}
-	b.WriteString("\n\n(Enter to select, Esc to cancel)")
+	b.WriteString("\n\n")
+	b.WriteString(m.styles.HelpDesc.Render("(Enter to select, Esc to cancel)"))
 	
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-		m.styles.MainView.BorderStyle(lipgloss.RoundedBorder()).Render(b.String()))
+		m.styles.MainView.BorderStyle(lipgloss.RoundedBorder()).BorderForeground(DefaultTheme.Accent).Render(b.String()))
 }
 
 func (m Model) renderHelp() string {
-	help := `
-  DOPAMINE HELP
-  =============
+	var b strings.Builder
+	b.WriteString(m.styles.Title.Render("DOPAMINE HELP"))
+	b.WriteString("\n\n")
 
-  NAVIGATION
-  k / ↑        : Move up
-  j / ↓        : Move down
-  Enter        : Play / Open
-  Backspace    : Back
-  Space        : Pause/Resume
-  n / p        : Next / Previous
-  h / l        : Seek -10s / +10s
-  /            : Search in current view
-  s            : Scan Music folder
-  1, 2, 3, 4   : Switch views
-  +            : New Playlist
-  a            : Add track to playlist
-  ?            : Toggle help
-  q / Ctrl+C   : Quit
+	keys := [][]string{
+		{"k / ↑", "Move up"},
+		{"j / ↓", "Move down"},
+		{"Enter", "Play track / Open item"},
+		{"Backspace", "Back / Edit Search"},
+		{"Esc", "Reset Search / Back"},
+		{"Space", "Pause / Resume"},
+		{"n / p", "Next / Previous track"},
+		{"h / l", "Seek -10s / +10s"},
+		{"/", "Search in current view"},
+		{"s", "Scan Music folder"},
+		{"1-4", "Switch views (Home, Artists, Albums, Playlists)"},
+		{"+", "Create New Playlist"},
+		{"a", "Add track to playlist"},
+		{"?", "Toggle help"},
+		{"q", "Quit"},
+	}
 
-  Press any key to return...
-`
+	for _, k := range keys {
+		b.WriteString(fmt.Sprintf("%s %s\n", m.styles.HelpKey.Render(fmt.Sprintf("%-12s", k[0])), m.styles.HelpDesc.Render(k[1])))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(m.styles.HelpDesc.Render("Press any key to return..."))
+
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, 
-		m.styles.MainView.BorderStyle(lipgloss.RoundedBorder()).Render(help))
+		m.styles.MainView.BorderStyle(lipgloss.RoundedBorder()).BorderForeground(DefaultTheme.Primary).Render(b.String()))
 }
 
 func (m Model) renderSidebar() string {
@@ -495,33 +538,41 @@ func (m Model) renderSidebar() string {
 	}
 
 	activeStyle := m.styles.ActiveItem
-	normalStyle := lipgloss.NewStyle()
+	normalStyle := m.styles.InactiveItem
 
 	for _, item := range items {
 		style := normalStyle
-		if m.mode == item.mode || (item.mode == PlaylistView && m.mode == PlaylistTrackView) {
+		isActive := m.mode == item.mode || (item.mode == PlaylistView && m.mode == PlaylistTrackView)
+		if isActive {
 			style = activeStyle
+			b.WriteString(style.Render(fmt.Sprintf(" %s %s", item.icon, item.name)))
+		} else {
+			b.WriteString(style.Render(fmt.Sprintf("  %s %s", item.icon, item.name)))
 		}
-		b.WriteString(style.Render(fmt.Sprintf("%s %s", item.icon, item.name)))
 		b.WriteString("\n")
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(" Help (?)")
+	b.WriteString(m.styles.HelpDesc.Render("  Help (?)"))
 	return b.String()
 }
 
 func (m Model) renderMainView() string {
 	if m.scanning {
-		return "Scanning library... please wait."
+		return lipgloss.Place(m.width-30, m.height-5, lipgloss.Center, lipgloss.Center, "Scanning library...\n\nThis may take a moment.")
 	}
 
 	var searchBar string
 	if m.inputMode == SearchInput || m.searchInput.Value() != "" {
-		searchBar = m.styles.ActiveItem.Render(" ") + m.searchInput.View() + "\n\n"
+		prompt := " "
+		if m.inputMode == SearchInput {
+			searchBar = m.styles.SearchHeader.Render(m.styles.ActiveItem.Render(prompt) + m.searchInput.View()) + "\n"
+		} else {
+			searchBar = m.styles.SearchHeader.Render(m.styles.InactiveItem.Render(prompt) + m.searchInput.Value()) + "\n"
+		}
 	}
 	if m.inputMode == PlaylistNameInput {
-		searchBar = m.styles.ActiveItem.Render("󰲸 New Playlist: ") + m.playlistInput.View() + "\n\n"
+		searchBar = m.styles.SearchHeader.Render(m.styles.ActiveItem.Render("󰲸 Name: ") + m.playlistInput.View()) + "\n"
 	}
 
 	switch m.mode {
@@ -547,37 +598,38 @@ func (m Model) renderTracks(title string) string {
 	}
 
 	if len(tracks) == 0 {
-		if m.searchInput.Value() != "" { return "No matches found." }
-		return "No tracks found."
+		if m.searchInput.Value() != "" { return "\n No matches found." }
+		return "\n No tracks found.\n Press 's' to scan."
 	}
 
 	var b strings.Builder
 	b.WriteString(m.styles.Title.Render(title))
 	b.WriteString("\n\n")
 
-	offset := 5
-	if m.inputMode != NoInput || m.searchInput.Value() != "" { offset = 7 }
-	maxVisible := m.height - 3 - offset
-	if maxVisible <= 0 { return "Terminal too small" }
-
+	maxVisible := m.getMaxVisibleItems()
 	endIndex := m.topIndex + maxVisible
 	if endIndex > len(tracks) { endIndex = len(tracks) }
 
 	activeStyle := m.styles.ActiveItem
-	normalStyle := lipgloss.NewStyle()
-	titleWidth := m.width - 25 - 4 - 2 - 3 - 25
-	if titleWidth < 10 { titleWidth = 10 }
+	normalStyle := m.styles.InactiveItem
+	
+	// Pre-calculate widths
+	availableWidth := m.width - 25 - 10
+	titleWidth := int(float64(availableWidth) * 0.6)
+	if titleWidth < 20 { titleWidth = 20 }
+	artistWidth := availableWidth - titleWidth
+	if artistWidth < 15 { artistWidth = 15 }
 
 	for i := m.topIndex; i < endIndex; i++ {
 		track := tracks[i]
-		cursor := " "
+		cursor := "  "
 		style := normalStyle
 		if i == m.cursor {
-			cursor = ">"
+			cursor = "❯ "
 			style = activeStyle
 		}
 		
-		line := fmt.Sprintf("%s %-*s | %s", cursor, titleWidth, truncate(track.Title, titleWidth), truncate(track.Artist, 20))
+		line := fmt.Sprintf("%s %-*s  %s", cursor, titleWidth, truncate(track.Title, titleWidth), truncate(track.Artist, artistWidth))
 		b.WriteString(style.Render(line))
 		b.WriteString("\n")
 	}
@@ -589,30 +641,26 @@ func (m Model) renderArtists() string {
 	if m.searchInput.Value() != "" { artists = m.filteredArtists }
 
 	if len(artists) == 0 {
-		if m.searchInput.Value() != "" { return "No matches found." }
-		return "No artists found."
+		if m.searchInput.Value() != "" { return "\n No matches found." }
+		return "\n No artists found."
 	}
 
 	var b strings.Builder
 	b.WriteString(m.styles.Title.Render("Artists"))
 	b.WriteString("\n\n")
 
-	offset := 5
-	if m.inputMode != NoInput || m.searchInput.Value() != "" { offset = 7 }
-	maxVisible := m.height - 3 - offset
-	if maxVisible <= 0 { return "Terminal too small" }
-
+	maxVisible := m.getMaxVisibleItems()
 	endIndex := m.topIndex + maxVisible
 	if endIndex > len(artists) { endIndex = len(artists) }
 
 	activeStyle := m.styles.ActiveItem
-	normalStyle := lipgloss.NewStyle()
+	normalStyle := m.styles.InactiveItem
 
 	for i := m.topIndex; i < endIndex; i++ {
-		cursor := " "
+		cursor := "  "
 		style := normalStyle
 		if i == m.cursor {
-			cursor = ">"
+			cursor = "❯ "
 			style = activeStyle
 		}
 		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, artists[i])))
@@ -626,30 +674,26 @@ func (m Model) renderAlbums() string {
 	if m.searchInput.Value() != "" { albums = m.filteredAlbums }
 
 	if len(albums) == 0 {
-		if m.searchInput.Value() != "" { return "No matches found." }
-		return "No albums found."
+		if m.searchInput.Value() != "" { return "\n No matches found." }
+		return "\n No albums found."
 	}
 
 	var b strings.Builder
 	b.WriteString(m.styles.Title.Render("Albums"))
 	b.WriteString("\n\n")
 
-	offset := 5
-	if m.inputMode != NoInput || m.searchInput.Value() != "" { offset = 7 }
-	maxVisible := m.height - 3 - offset
-	if maxVisible <= 0 { return "Terminal too small" }
-
+	maxVisible := m.getMaxVisibleItems()
 	endIndex := m.topIndex + maxVisible
 	if endIndex > len(albums) { endIndex = len(albums) }
 
 	activeStyle := m.styles.ActiveItem
-	normalStyle := lipgloss.NewStyle()
+	normalStyle := m.styles.InactiveItem
 
 	for i := m.topIndex; i < endIndex; i++ {
-		cursor := " "
+		cursor := "  "
 		style := normalStyle
 		if i == m.cursor {
-			cursor = ">"
+			cursor = "❯ "
 			style = activeStyle
 		}
 		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, albums[i])))
@@ -663,30 +707,26 @@ func (m Model) renderPlaylists() string {
 	if m.searchInput.Value() != "" { p = m.filteredPlaylists }
 
 	if len(p) == 0 {
-		if m.searchInput.Value() != "" { return "No matches found." }
-		return "No playlists found. Press '+' to create one."
+		if m.searchInput.Value() != "" { return "\n No matches found." }
+		return "\n No playlists found.\n Press '+' to create one."
 	}
 
 	var b strings.Builder
 	b.WriteString(m.styles.Title.Render("Playlists"))
 	b.WriteString("\n\n")
 
-	offset := 5
-	if m.inputMode != NoInput || m.searchInput.Value() != "" { offset = 7 }
-	maxVisible := m.height - 3 - offset
-	if maxVisible <= 0 { return "Terminal too small" }
-
+	maxVisible := m.getMaxVisibleItems()
 	endIndex := m.topIndex + maxVisible
 	if endIndex > len(p) { endIndex = len(p) }
 
 	activeStyle := m.styles.ActiveItem
-	normalStyle := lipgloss.NewStyle()
+	normalStyle := m.styles.InactiveItem
 
 	for i := m.topIndex; i < endIndex; i++ {
-		cursor := " "
+		cursor := "  "
 		style := normalStyle
 		if i == m.cursor {
-			cursor = ">"
+			cursor = "❯ "
 			style = activeStyle
 		}
 		b.WriteString(style.Render(fmt.Sprintf("%s %s", cursor, p[i])))
@@ -730,7 +770,7 @@ func (m Model) renderPlayerBar() string {
 }
 
 func (m Model) renderVisualizer(width int) string {
-	if m.audioEngine == nil || m.audioEngine.Ctrl != nil && m.audioEngine.Ctrl.Paused {
+	if m.audioEngine == nil || m.audioEngine.Ctrl == nil || m.audioEngine.Ctrl.Paused {
 		return "      "
 	}
 	
