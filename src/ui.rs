@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect, Alignment},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Row, Table, Paragraph, BorderType, List, ListItem},
+    widgets::{Block, Borders, Cell, Row, Table, Paragraph, BorderType, List, ListItem, Clear},
     Frame,
 };
 
@@ -12,6 +12,7 @@ const PRIMARY: Color = Color::Rgb(137, 180, 250); // Blue
 const ACCENT: Color = Color::Rgb(203, 166, 247); // Mauve
 const SECONDARY: Color = Color::Rgb(166, 227, 161); // Green
 const INACTIVE: Color = Color::Rgb(88, 91, 112); // Surface2
+const BG: Color = Color::Rgb(30, 30, 46);
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let size = f.area();
@@ -230,6 +231,10 @@ fn draw_playlists(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_select_playlist(f: &mut Frame, app: &mut App) {
     let area = centered_rect(60, 40, f.area());
+    
+    // Clear the background of the popup area
+    f.render_widget(Clear, area);
+
     let items: Vec<ListItem> = app.playlists.iter().map(|p| {
         ListItem::new(p.as_str()).style(Style::default().fg(FG))
     }).collect();
@@ -239,11 +244,12 @@ fn draw_select_playlist(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(ACCENT))
+            .style(Style::default().bg(BG)) // Set a solid background color
             .title(" Add to Playlist "))
         .highlight_style(Style::default().bg(Color::Rgb(49, 50, 68)).fg(ACCENT).add_modifier(Modifier::BOLD))
         .highlight_symbol("❯ ");
 
-    f.render_stateful_widget(l, area, &mut app.list_state);
+    f.render_stateful_widget(l, area, &mut app.playlist_select_state);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
