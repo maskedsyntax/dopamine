@@ -25,7 +25,6 @@ impl Db {
             [],
         )?;
 
-        // Ensure path UNIQUE index exists independently of table creation
         self.conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_path ON tracks(path)",
             [],
@@ -43,13 +42,13 @@ impl Db {
             "CREATE TABLE IF NOT EXISTS playlist_tracks (
                 playlist_id INTEGER,
                 track_path TEXT,
+                PRIMARY KEY(playlist_id, track_path),
                 FOREIGN KEY(playlist_id) REFERENCES playlists(id),
                 FOREIGN KEY(track_path) REFERENCES tracks(path) ON DELETE CASCADE
             )",
             [],
         )?;
 
-        // Final cleanup for any duplicates that bypassed constraints
         self.conn.execute(
             "DELETE FROM tracks WHERE rowid NOT IN (SELECT MIN(rowid) FROM tracks GROUP BY path)",
             [],
@@ -198,7 +197,7 @@ impl Db {
         let playlist_id: i64 = stmt.query_row([playlist_name], |row| row.get(0))?;
 
         self.conn.execute(
-            "INSERT INTO playlist_tracks (playlist_id, track_path) VALUES (?1, ?2)",
+            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_path) VALUES (?1, ?2)",
             params![playlist_id, track_path],
         )?;
         Ok(())
@@ -210,7 +209,9 @@ impl Db {
              FROM tracks t
              JOIN playlist_tracks pt ON t.path = pt.track_path
              JOIN playlists p ON pt.playlist_id = p.id
-             WHERE p.name = ?1"
+             WHERE p.name = ?1
+             GROUP BY t.title, t.artist, t.album
+             ORDER BY t.title"
         )?;
         let tracks = stmt
             .query_map([playlist_name], |row| {

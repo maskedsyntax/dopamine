@@ -145,7 +145,6 @@ fn run_app(
                                     std::thread::spawn(move || {
                                         let _ = tx_clone.send(Message::ScanStarted);
                                         if let Ok(db) = db::Db::new(&db_path_str) {
-                                            let _ = db.clear_db();
                                             let music_dir = dirs::audio_dir().or_else(|| {
                                                 dirs::home_dir().map(|h| h.join("Music"))
                                             });
