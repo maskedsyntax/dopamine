@@ -4,8 +4,9 @@ use crate::models::Track;
 use anyhow::Result;
 use ratatui::widgets::{TableState, ListState};
 use tui_input::Input;
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{FftPlanner, num_complex::Complex, Fft};
 use std::time::Duration;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -56,6 +57,7 @@ pub struct App {
     pub scanning: bool,
     pub marquee_offset: usize,
     pub visualizer_data: Vec<f32>,
+    pub fft_plan: Arc<dyn Fft<f32>>,
 }
 
 impl App {
@@ -63,6 +65,9 @@ impl App {
         let db = Db::new(db_path)?;
         db.init()?;
         let audio = AudioEngine::new()?;
+        let mut planner = FftPlanner::new();
+        let fft_plan = planner.plan_fft_forward(1024);
+        
         Ok(Self {
             db,
             audio,
@@ -88,6 +93,7 @@ impl App {
             scanning: false,
             marquee_offset: 0,
             visualizer_data: vec![0.0; 20],
+            fft_plan,
         })
     }
 
@@ -367,7 +373,7 @@ impl App {
 
     pub fn update_visualizer(&mut self) {
         if self.audio.is_paused() || self.audio.is_empty() {
-            self.visualizer_data.iter_mut().for_each(|v| *v *= 0.8); // Faster fade out
+            self.visualizer_data.iter_mut().for_each(|v| *v *= 0.8);
             return;
         }
 
@@ -381,11 +387,8 @@ impl App {
         }
 
         let n = 1024;
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(n);
-
         let mut buffer: Vec<Complex<f32>> = samples.iter().take(n).map(|&s| Complex { re: s, im: 0.0 }).collect();
-        fft.process(&mut buffer);
+        self.fft_plan.process(&mut buffer);
 
         let num_bars = self.visualizer_data.len();
         let chunk_size = (n / 2) / num_bars;
@@ -396,7 +399,6 @@ impl App {
                 .map(|c| (c.re * c.re + c.im * c.im).sqrt())
                 .sum();
             let val = (sum / chunk_size as f32) * 4.0;
-            // High smoothing: 20% new, 80% old for "chilled" look
             self.visualizer_data[i] = (val.clamp(0.0, 1.0) * 0.2) + (self.visualizer_data[i] * 0.8);
         }
     }
