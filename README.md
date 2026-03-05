@@ -1,12 +1,17 @@
 # Dopamine
 
-A polished, offline TUI music player for Windows, Linux, and macOS.
+**Pure audio adrenaline, served from the shell.**
+
+A polished, offline TUI music player for Windows, Linux, and macOS. Rewritten in Rust for extreme performance and a jitter-free experience.
 
 ## Features
-- **Fast & Lightweight**: Rewritten in Rust for maximum performance and low resource usage.
-- **Modern UI**: Clean, responsive layout built with `ratatui` and `crossterm`.
-- **Advanced Library Management**: Automatic deduplication and background scanning.
-- **Search Everywhere**: Instant fuzzy search across your entire collection.
+- **Fast & Lightweight**: Built with Rust and Ratatui for minimal CPU and memory footprint.
+- **Hierarchical Browsing**: Navigate your collection by Songs, Artists, or Albums.
+- **Playlist Management**: Create, view, and manage local playlists with full persistence.
+- **Smart Search**: Context-aware fuzzy search across tracks, artists, and albums.
+- **Stable UI**: Redesigned player bar with smooth marquee scrolling, real-time progress tracking, and logical playback controls.
+- **Background Scanning**: Multi-threaded library indexing with automatic deduplication and stale file cleanup.
+- **Safe Operations**: Confirmation prompts for critical actions like quitting or deleting data.
 
 ## Tech Stack
 - **Language**: Rust
@@ -25,9 +30,21 @@ cargo build --release
 ```
 
 ## Keybindings
-- `/` : Search
-- `s` : Scan library (~/Music)
-- `j` / `k` (or arrows) : Navigate
-- `Enter` : Play
-- `Space` : Pause/Resume
-- `q` : Quit
+
+### Navigation
+- `1` - `4`: Switch views (Home, Artists, Albums, Playlists)
+- `j` / `k` or `Arrows`: Navigate lists
+- `Enter`: Play selected track / Open folder or playlist
+- `Backspace`: Go back to previous view
+- `/`: Search
+- `Ctrl-n`: Create new playlist
+- `a`: Add highlighted track to playlist
+- `Delete`: Delete highlighted playlist (in Playlist view)
+
+### Playback
+- `Space`: Pause / Resume
+- `n`: Next track
+- `p`: Previous track
+- `+` / `-`: Volume up / down
+- `s`: Scan library (~/Music)
+- `q`: Quit (with confirmation)
