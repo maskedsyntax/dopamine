@@ -4,28 +4,27 @@ use std::fs::File;
 use std::io::BufReader;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
 
 pub struct VisualizerSource<I>
 where
     I: Source,
 {
     inner: I,
-    samples: Arc<Mutex<VecDeque<f32>>>,
-    local_buffer: Vec<f32>,
-    batch_size: usize,
+    samples: Arc<Mutex<Vec<f32>>>,
+    write_pos: usize,
+    batch_buffer: Vec<f32>,
 }
 
 impl<I> VisualizerSource<I>
 where
     I: Source,
 {
-    pub fn new(inner: I, samples: Arc<Mutex<VecDeque<f32>>>) -> Self {
+    pub fn new(inner: I, samples: Arc<Mutex<Vec<f32>>>) -> Self {
         Self { 
             inner, 
             samples,
-            local_buffer: Vec::with_capacity(512),
-            batch_size: 512,
+            write_pos: 0,
+            batch_buffer: Vec::with_capacity(256),
         }
     }
 }
@@ -39,20 +38,18 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let sample = self.inner.next();
         if let Some(s) = sample {
-            self.local_buffer.push(s);
-            
-            if self.local_buffer.len() >= self.batch_size {
-                // Use try_lock to never block the audio thread
+            self.batch_buffer.push(s);
+            if self.batch_buffer.len() >= 256 {
                 if let Ok(mut samples) = self.samples.try_lock() {
-                    for &s in &self.local_buffer {
-                        samples.push_back(s);
-                    }
-                    // Keep the deque at a reasonable size for FFT
-                    while samples.len() > 2048 {
-                        samples.pop_front();
+                    let len = samples.len();
+                    if len > 0 {
+                        for &val in &self.batch_buffer {
+                            samples[self.write_pos] = val;
+                            self.write_pos = (self.write_pos + 1) % len;
+                        }
                     }
                 }
-                self.local_buffer.clear();
+                self.batch_buffer.clear();
             }
         }
         sample
@@ -85,7 +82,7 @@ pub struct AudioEngine {
     player: Player,
     paused: bool,
     volume: f32,
-    pub samples: Arc<Mutex<VecDeque<f32>>>,
+    pub samples: Arc<Mutex<Vec<f32>>>,
 }
 
 impl AudioEngine {
@@ -100,7 +97,7 @@ impl AudioEngine {
             player,
             paused: false,
             volume: 0.5,
-            samples: Arc::new(Mutex::new(VecDeque::with_capacity(2048))),
+            samples: Arc::new(Mutex::new(vec![0.0; 1024])),
         })
     }
 

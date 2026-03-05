@@ -316,10 +316,10 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(12), // Small visualizer
+            Constraint::Length(12), // Visualizer
             Constraint::Length(4),  // Play/Pause icon
-            Constraint::Min(10),    // Marquee text
-            Constraint::Length(27), // Progress bar
+            Constraint::Percentage(30), // Marquee (Flexible)
+            Constraint::Min(20),    // Progress bar (Flexible)
             Constraint::Length(15), // Time
             Constraint::Length(12), // Volume
         ])
@@ -332,12 +332,12 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
     let bar_chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
     for i in 0..viz_width {
         if i % 2 == 0 {
-            let data_idx = (i / 2 * num_bars) / (viz_width / 2);
+            let data_idx = (i / 2 * num_bars) / (viz_width / 2 + 1);
             let val = app.visualizer_data[data_idx.clamp(0, num_bars - 1)];
             let char_idx = (val * (bar_chars.len() - 1) as f32).round() as usize;
             bars.push_str(bar_chars[char_idx.clamp(0, bar_chars.len() - 1)]);
         } else {
-            bars.push(' '); // Micro gap
+            bars.push(' ');
         }
     }
     f.render_widget(Paragraph::new(bars).style(Style::default().fg(ACCENT)), chunks[0]);
