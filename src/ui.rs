@@ -22,7 +22,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(0),
-            Constraint::Length(7), // Visualizer Height increased
             Constraint::Length(3),
         ])
         .split(size);
@@ -55,8 +54,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_confirmation(f, conf);
     }
     
-    draw_visualizer(f, app, chunks[2]);
-    draw_player(f, app, chunks[3]);
+    draw_player(f, app, chunks[2]);
 }
 
 fn draw_search(f: &mut Frame, app: &App, area: Rect) {
@@ -305,54 +303,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn draw_visualizer(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(INACTIVE))
-        .title(" Visualization ");
-    
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if inner.height == 0 || inner.width == 0 { return; }
-    
-    let num_data = app.visualizer_data.len();
-    let bar_chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-    
-    let mut rows = vec![String::with_capacity(inner.width as usize); inner.height as usize];
-    
-    for x in 0..inner.width {
-        let data_idx = (x as usize * num_data) / inner.width as usize;
-        let val = app.visualizer_data[data_idx.clamp(0, num_data - 1)];
-        
-        let total_steps = (val * (inner.height as f32 * 8.0)).round() as usize;
-        
-        for y in 0..inner.height {
-            let step_start = y as usize * 8;
-            let char_idx = if total_steps >= step_start + 8 {
-                7
-            } else if total_steps > step_start {
-                total_steps - step_start - 1
-            } else {
-                0
-            };
-            rows[y as usize].push_str(bar_chars[char_idx.clamp(0, 7)]);
-        }
-    }
-    
-    for (y, row_text) in rows.into_iter().enumerate() {
-        let row_idx = inner.height as usize - 1 - y;
-        // Color gradient: Blue at bottom, Mauve at top
-        let intensity = y as f32 / inner.height as f32;
-        let color = if intensity < 0.5 { PRIMARY } else { ACCENT };
-        
-        f.render_widget(
-            Paragraph::new(row_text).style(Style::default().fg(color)),
-            Rect::new(inner.x, inner.y + row_idx as u16, inner.width, 1)
-        );
-    }
-}
-
 fn draw_player(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -366,6 +316,7 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
+            Constraint::Length(12), // Small visualizer
             Constraint::Length(4),  // Play/Pause icon
             Constraint::Min(10),    // Marquee text
             Constraint::Length(27), // Progress bar
@@ -374,21 +325,34 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(inner);
 
-    // 1. Play/Pause icon
-    let state = if app.audio.is_paused() { " ▶ " } else { " ⏸ " };
-    f.render_widget(Paragraph::new(state).style(Style::default().fg(FG).bold()), chunks[0]);
+    // 1. Visualizer
+    let num_bars = app.visualizer_data.len();
+    let viz_width = chunks[0].width as usize;
+    let mut bars = String::new();
+    let bar_chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    for i in 0..viz_width {
+        let data_idx = (i * num_bars) / viz_width;
+        let val = app.visualizer_data[data_idx];
+        let char_idx = (val * (bar_chars.len() - 1) as f32).round() as usize;
+        bars.push_str(bar_chars[char_idx.clamp(0, bar_chars.len() - 1)]);
+    }
+    f.render_widget(Paragraph::new(bars).style(Style::default().fg(ACCENT)), chunks[0]);
 
-    // 5. Volume
+    // 2. Play/Pause icon
+    let state = if app.audio.is_paused() { " ▶ " } else { " ⏸ " };
+    f.render_widget(Paragraph::new(state).style(Style::default().fg(FG).bold()), chunks[1]);
+
+    // 6. Volume
     let vol = format!(" Vol: {:>3}%", (app.audio.volume() * 100.0) as i32);
-    f.render_widget(Paragraph::new(vol).style(Style::default().fg(FG).bold()).alignment(Alignment::Right), chunks[4]);
+    f.render_widget(Paragraph::new(vol).style(Style::default().fg(FG).bold()).alignment(Alignment::Right), chunks[5]);
 
     if let Some(track) = &app.current_track {
-        // 2. Marquee Text
+        // 3. Marquee Text
         let display_text = format!(" {} - {}", track.title, track.artist);
-        let max_text_len = chunks[1].width as usize;
+        let max_text_len = chunks[2].width as usize;
         let final_text = if display_text.len() > max_text_len && max_text_len > 0 {
             let padded = format!("{}   ", display_text);
-            let start = (app.marquee_offset / 4) % padded.len(); // Slower speed
+            let start = (app.marquee_offset / 4) % padded.len();
             let mut result = String::new();
             for i in 0..max_text_len {
                 result.push(padded.chars().nth((start + i) % padded.len()).unwrap_or(' '));
@@ -397,26 +361,26 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
         } else {
             display_text
         };
-        f.render_widget(Paragraph::new(final_text).style(Style::default().fg(FG).bold()), chunks[1]);
+        f.render_widget(Paragraph::new(final_text).style(Style::default().fg(FG).bold()), chunks[2]);
 
-        // 3. Progress Bar
+        // 4. Progress Bar
         let pos = app.audio.position().as_secs();
         let total = track.duration_secs.max(0) as u64;
         let progress = if total > 0 { (pos as f64 / total as f64).clamp(0.0, 1.0) } else { 0.0 };
-        let bar_width = (chunks[2].width as usize).saturating_sub(2);
+        let bar_width = (chunks[3].width as usize).saturating_sub(2);
         let filled = (progress * bar_width as f64).round() as usize;
         let empty = bar_width.saturating_sub(filled);
         let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
-        f.render_widget(Paragraph::new(bar).style(Style::default().fg(FG)), chunks[2]);
+        f.render_widget(Paragraph::new(bar).style(Style::default().fg(FG)), chunks[3]);
 
-        // 4. Time
+        // 5. Time
         let pos_mins = pos / 60;
         let pos_secs = pos % 60;
         let total_mins = total / 60;
         let total_secs = total % 60;
         let time_str = format!(" {:02}:{:02} / {:02}:{:02}", pos_mins, pos_secs, total_mins, total_secs);
-        f.render_widget(Paragraph::new(time_str).style(Style::default().fg(FG).bold()), chunks[3]);
+        f.render_widget(Paragraph::new(time_str).style(Style::default().fg(FG).bold()), chunks[4]);
     } else {
-        f.render_widget(Paragraph::new(" No track playing").style(Style::default().fg(INACTIVE)), chunks[1]);
+        f.render_widget(Paragraph::new(" No track playing").style(Style::default().fg(INACTIVE)), chunks[2]);
     }
 }

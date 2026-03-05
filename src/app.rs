@@ -87,7 +87,7 @@ impl App {
             current_track: None,
             scanning: false,
             marquee_offset: 0,
-            visualizer_data: vec![0.0; 64],
+            visualizer_data: vec![0.0; 20],
         })
     }
 
@@ -367,7 +367,7 @@ impl App {
 
     pub fn update_visualizer(&mut self) {
         if self.audio.is_paused() || self.audio.is_empty() {
-            self.visualizer_data.iter_mut().for_each(|v| *v *= 0.9); // Smooth fade out
+            self.visualizer_data.iter_mut().for_each(|v| *v *= 0.8); // Faster fade out
             return;
         }
 
@@ -387,8 +387,7 @@ impl App {
         let mut buffer: Vec<Complex<f32>> = samples.iter().take(n).map(|&s| Complex { re: s, im: 0.0 }).collect();
         fft.process(&mut buffer);
 
-        // Map FFT results to our bars
-        let num_bars = 64;
+        let num_bars = self.visualizer_data.len();
         let chunk_size = (n / 2) / num_bars;
         
         for i in 0..num_bars {
@@ -396,8 +395,9 @@ impl App {
                 .iter()
                 .map(|c| (c.re * c.re + c.im * c.im).sqrt())
                 .sum();
-            let val = (sum / chunk_size as f32) * 5.0; // Scale factor
-            self.visualizer_data[i] = val.clamp(0.0, 1.0);
+            let val = (sum / chunk_size as f32) * 4.0;
+            // High smoothing: 20% new, 80% old for "chilled" look
+            self.visualizer_data[i] = (val.clamp(0.0, 1.0) * 0.2) + (self.visualizer_data[i] * 0.8);
         }
     }
 
