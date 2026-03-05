@@ -12,6 +12,8 @@ where
 {
     inner: I,
     samples: Arc<Mutex<VecDeque<f32>>>,
+    local_buffer: Vec<f32>,
+    batch_size: usize,
 }
 
 impl<I> VisualizerSource<I>
@@ -19,7 +21,12 @@ where
     I: Source,
 {
     pub fn new(inner: I, samples: Arc<Mutex<VecDeque<f32>>>) -> Self {
-        Self { inner, samples }
+        Self { 
+            inner, 
+            samples,
+            local_buffer: Vec::with_capacity(512),
+            batch_size: 512,
+        }
     }
 }
 
@@ -32,11 +39,20 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let sample = self.inner.next();
         if let Some(s) = sample {
-            if let Ok(mut samples) = self.samples.lock() {
-                samples.push_back(s);
-                if samples.len() > 2048 {
-                    samples.pop_front();
+            self.local_buffer.push(s);
+            
+            if self.local_buffer.len() >= self.batch_size {
+                // Use try_lock to never block the audio thread
+                if let Ok(mut samples) = self.samples.try_lock() {
+                    for &s in &self.local_buffer {
+                        samples.push_back(s);
+                    }
+                    // Keep the deque at a reasonable size for FFT
+                    while samples.len() > 2048 {
+                        samples.pop_front();
+                    }
                 }
+                self.local_buffer.clear();
             }
         }
         sample
