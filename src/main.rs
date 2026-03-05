@@ -131,7 +131,9 @@ fn run_app(
                         match key.code {
                             KeyCode::Char('q') => return Ok(()),
                             KeyCode::Char('/') => app.input_mode = app::InputMode::Search,
-                            KeyCode::Char('+') => app.input_mode = app::InputMode::CreatePlaylist,
+                            KeyCode::Char('n') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                                app.input_mode = app::InputMode::CreatePlaylist;
+                            }
                             KeyCode::Char('a') => app.start_add_to_playlist(),
                             KeyCode::Char('s') => {
                                 if !app.scanning {
@@ -165,7 +167,7 @@ fn run_app(
                             KeyCode::Char('4') => app.set_view(app::View::Playlists),
                             KeyCode::Char('n') => app.play_next(),
                             KeyCode::Char('p') => app.play_prev(),
-                            KeyCode::Char('=') => {
+                            KeyCode::Char('=') | KeyCode::Char('+') => {
                                 let v = app.audio.volume();
                                 app.audio.set_volume(v + 0.05);
                             }

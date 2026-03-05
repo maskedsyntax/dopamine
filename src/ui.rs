@@ -136,6 +136,7 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     sidebar_items.push(Line::from(vec![Span::styled(" ", Style::default())]));
     sidebar_items.push(Line::from(vec![Span::styled("  n/p: Next/Prev track", Style::default().fg(INACTIVE))]));
     sidebar_items.push(Line::from(vec![Span::styled("  +/-: Volume", Style::default().fg(INACTIVE))]));
+    sidebar_items.push(Line::from(vec![Span::styled("  Ctrl-n: New Playlist", Style::default().fg(INACTIVE))]));
     sidebar_items.push(Line::from(vec![Span::styled("  q: Quit", Style::default().fg(INACTIVE))]));
 
     let p = Paragraph::new(sidebar_items).block(block);

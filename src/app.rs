@@ -164,6 +164,15 @@ impl App {
     }
 
     pub fn next(&mut self) {
+        if let InputMode::SelectPlaylist(_) = &self.input_mode {
+            let len = self.playlists.len();
+            let i = match self.list_state.selected() {
+                Some(i) => if i >= len.saturating_sub(1) { 0 } else { i + 1 },
+                None => 0,
+            };
+            self.list_state.select(Some(i));
+            return;
+        }
         match self.view {
             View::Home | View::PlaylistDetail => {
                 let len = self.filtered_tracks.len();
@@ -201,6 +210,15 @@ impl App {
     }
 
     pub fn previous(&mut self) {
+        if let InputMode::SelectPlaylist(_) = &self.input_mode {
+            let len = self.playlists.len();
+            let i = match self.list_state.selected() {
+                Some(i) => if i == 0 { len.saturating_sub(1) } else { i - 1 },
+                None => 0,
+            };
+            self.list_state.select(Some(i));
+            return;
+        }
         match self.view {
             View::Home | View::PlaylistDetail => {
                 let len = self.filtered_tracks.len();
