@@ -22,7 +22,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(0),
-            Constraint::Length(2), // Visualizer
+            Constraint::Length(7), // Visualizer Height increased
             Constraint::Length(3),
         ])
         .split(size);
@@ -306,24 +306,51 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 fn draw_visualizer(f: &mut Frame, app: &App, area: Rect) {
-    let num_bars = app.visualizer_data.len();
-    let width = area.width as usize;
-    if width == 0 { return; }
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(INACTIVE))
+        .title(" Visualization ");
+    
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    let mut bars = String::new();
+    if inner.height == 0 || inner.width == 0 { return; }
+    
+    let num_data = app.visualizer_data.len();
     let bar_chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-
-    for i in 0..width {
-        let data_idx = (i * num_bars) / width;
-        let val = app.visualizer_data[data_idx];
-        let char_idx = (val * (bar_chars.len() - 1) as f32).round() as usize;
-        bars.push_str(bar_chars[char_idx.clamp(0, bar_chars.len() - 1)]);
+    
+    let mut rows = vec![String::with_capacity(inner.width as usize); inner.height as usize];
+    
+    for x in 0..inner.width {
+        let data_idx = (x as usize * num_data) / inner.width as usize;
+        let val = app.visualizer_data[data_idx.clamp(0, num_data - 1)];
+        
+        let total_steps = (val * (inner.height as f32 * 8.0)).round() as usize;
+        
+        for y in 0..inner.height {
+            let step_start = y as usize * 8;
+            let char_idx = if total_steps >= step_start + 8 {
+                7
+            } else if total_steps > step_start {
+                total_steps - step_start - 1
+            } else {
+                0
+            };
+            rows[y as usize].push_str(bar_chars[char_idx.clamp(0, 7)]);
+        }
     }
-
-    let p = Paragraph::new(bars)
-        .style(Style::default().fg(ACCENT))
-        .alignment(Alignment::Center);
-    f.render_widget(p, area);
+    
+    for (y, row_text) in rows.into_iter().enumerate() {
+        let row_idx = inner.height as usize - 1 - y;
+        // Color gradient: Blue at bottom, Mauve at top
+        let intensity = y as f32 / inner.height as f32;
+        let color = if intensity < 0.5 { PRIMARY } else { ACCENT };
+        
+        f.render_widget(
+            Paragraph::new(row_text).style(Style::default().fg(color)),
+            Rect::new(inner.x, inner.y + row_idx as u16, inner.width, 1)
+        );
+    }
 }
 
 fn draw_player(f: &mut Frame, app: &App, area: Rect) {
