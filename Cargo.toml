@@ -1,0 +1,16 @@
+[package]
+name = "dopamine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+crossterm = "0.29.0"
+dirs = "6.0.0"
+fuzzy-matcher = "0.3.7"
+lofty = "0.23.2"
+ratatui = "0.30.0"
+rodio = "0.22.1"
+rusqlite = "0.38.0"
+tui-input = "0.15.0"
+walkdir = "2.5.0"
