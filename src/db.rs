@@ -75,6 +75,70 @@ impl Db {
         Ok(())
     }
 
+    pub fn get_artists(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT artist FROM tracks ORDER BY artist")?;
+        let artists = stmt
+            .query_map([], |row| row.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(artists)
+    }
+
+    pub fn get_albums(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT album FROM tracks ORDER BY album")?;
+        let albums = stmt
+            .query_map([], |row| row.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(albums)
+    }
+
+    pub fn get_tracks_by_artist(&self, artist: &str) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, title, artist, album, duration 
+             FROM tracks 
+             WHERE artist = ? 
+             GROUP BY title, artist, album 
+             ORDER BY album, title"
+        )?;
+        let tracks = stmt
+            .query_map([artist], |row| {
+                Ok(Track {
+                    path: row.get(0)?,
+                    title: row.get(1)?,
+                    artist: row.get(2)?,
+                    album: row.get(3)?,
+                    duration_secs: row.get(4)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(tracks)
+    }
+
+    pub fn get_tracks_by_album(&self, album: &str) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, title, artist, album, duration 
+             FROM tracks 
+             WHERE album = ? 
+             GROUP BY title, artist, album 
+             ORDER BY title"
+        )?;
+        let tracks = stmt
+            .query_map([album], |row| {
+                Ok(Track {
+                    path: row.get(0)?,
+                    title: row.get(1)?,
+                    artist: row.get(2)?,
+                    album: row.get(3)?,
+                    duration_secs: row.get(4)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(tracks)
+    }
+
     pub fn get_all_tracks(&self) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT path, title, artist, album, duration 

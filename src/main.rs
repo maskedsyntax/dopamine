@@ -119,6 +119,10 @@ fn run_app(
                                 });
                             }
                         }
+                        KeyCode::Char('1') => app.set_view(app::View::Home),
+                        KeyCode::Char('2') => app.set_view(app::View::Artists),
+                        KeyCode::Char('3') => app.set_view(app::View::Albums),
+                        KeyCode::Char('4') => app.set_view(app::View::Playlists),
                         KeyCode::Up | KeyCode::Char('k') => app.previous(),
                         KeyCode::Down | KeyCode::Char('j') => app.next(),
                         KeyCode::Enter => app.play_selected(),
