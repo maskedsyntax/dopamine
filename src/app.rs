@@ -11,13 +11,15 @@ pub enum View {
     Artists,
     Albums,
     Playlists,
+    PlaylistDetail,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum InputMode {
     Normal,
     Search,
     CreatePlaylist,
+    SelectPlaylist(Track),
 }
 
 pub struct App {
@@ -32,6 +34,7 @@ pub struct App {
     pub filtered_artists: Vec<String>,
     pub filtered_albums: Vec<String>,
     pub filtered_playlists: Vec<String>,
+    pub selected_playlist: Option<String>,
     pub queue: Vec<Track>,
     pub queue_index: usize,
     pub table_state: TableState,
@@ -60,6 +63,7 @@ impl App {
             filtered_artists: Vec::new(),
             filtered_albums: Vec::new(),
             filtered_playlists: Vec::new(),
+            selected_playlist: None,
             queue: Vec::new(),
             queue_index: 0,
             table_state: TableState::default(),
@@ -85,14 +89,23 @@ impl App {
         let query = self.search_input.value().to_lowercase();
         
         match self.view {
-            View::Home => {
-                if query.is_empty() {
-                    self.filtered_tracks = self.tracks.clone();
+            View::Home | View::PlaylistDetail => {
+                let base_tracks = if self.view == View::PlaylistDetail {
+                    if let Some(p) = &self.selected_playlist {
+                        self.db.get_tracks_by_playlist(p).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    }
                 } else {
-                    self.filtered_tracks = self.tracks
-                        .iter()
+                    self.tracks.clone()
+                };
+
+                if query.is_empty() {
+                    self.filtered_tracks = base_tracks;
+                } else {
+                    self.filtered_tracks = base_tracks
+                        .into_iter()
                         .filter(|t| t.title.to_lowercase().contains(&query) || t.artist.to_lowercase().contains(&query))
-                        .cloned()
                         .collect();
                 }
             }
@@ -142,6 +155,9 @@ impl App {
     pub fn set_view(&mut self, view: View) {
         self.view = view;
         self.search_input = Input::default(); // Clear search on view switch
+        if view != View::PlaylistDetail {
+            self.selected_playlist = None;
+        }
         self.table_state.select(Some(0));
         self.list_state.select(Some(0));
         self.apply_search();
@@ -149,7 +165,7 @@ impl App {
 
     pub fn next(&mut self) {
         match self.view {
-            View::Home => {
+            View::Home | View::PlaylistDetail => {
                 let len = self.filtered_tracks.len();
                 let i = match self.table_state.selected() {
                     Some(i) => if i >= len.saturating_sub(1) { 0 } else { i + 1 },
@@ -186,7 +202,7 @@ impl App {
 
     pub fn previous(&mut self) {
         match self.view {
-            View::Home => {
+            View::Home | View::PlaylistDetail => {
                 let len = self.filtered_tracks.len();
                 let i = match self.table_state.selected() {
                     Some(i) => if i == 0 { len.saturating_sub(1) } else { i - 1 },
@@ -223,7 +239,7 @@ impl App {
 
     pub fn play_selected(&mut self) {
         match self.view {
-            View::Home => {
+            View::Home | View::PlaylistDetail => {
                 if let Some(idx) = self.table_state.selected() {
                     if let Some(track) = self.filtered_tracks.get(idx) {
                         self.queue = self.filtered_tracks.clone();
@@ -258,27 +274,32 @@ impl App {
             View::Playlists => {
                 if let Some(idx) = self.list_state.selected() {
                     if let Some(playlist) = self.filtered_playlists.get(idx).cloned() {
-                        if let Ok(tracks) = self.db.get_tracks_by_playlist(&playlist) {
-                            self.filtered_tracks = tracks;
-                            self.view = View::Home;
-                            self.table_state.select(Some(0));
-                        }
+                        self.selected_playlist = Some(playlist);
+                        self.view = View::PlaylistDetail;
+                        self.table_state.select(Some(0));
+                        self.apply_search();
                     }
                 }
             }
         }
     }
 
-    pub fn add_current_to_playlist(&mut self) {
-        if let Some(track) = &self.current_track {
-            if let Some(idx) = self.list_state.selected() {
-                if self.view == View::Playlists {
-                    if let Some(playlist) = self.filtered_playlists.get(idx).cloned() {
-                        let _ = self.db.add_track_to_playlist(&playlist, &track.path);
-                    }
-                }
+    pub fn start_add_to_playlist(&mut self) {
+        if let Some(idx) = self.table_state.selected() {
+            if let Some(track) = self.filtered_tracks.get(idx).cloned() {
+                self.input_mode = InputMode::SelectPlaylist(track);
+                self.list_state.select(Some(0));
             }
         }
+    }
+
+    pub fn confirm_add_to_playlist(&mut self, track: Track) {
+        if let Some(idx) = self.list_state.selected() {
+            if let Some(playlist) = self.playlists.get(idx) {
+                let _ = self.db.add_track_to_playlist(playlist, &track.path);
+            }
+        }
+        self.input_mode = InputMode::Normal;
     }
 
     pub fn play_next(&mut self) {

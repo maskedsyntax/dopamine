@@ -42,6 +42,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         View::Artists => draw_artists(f, app, main_chunks[1]),
         View::Albums => draw_albums(f, app, main_chunks[1]),
         View::Playlists => draw_playlists(f, app, main_chunks[1]),
+        View::PlaylistDetail => draw_table(f, app, main_chunks[1]),
+    }
+    
+    if let InputMode::SelectPlaylist(_) = &app.input_mode {
+        draw_select_playlist(f, app);
     }
     
     draw_player(f, app, chunks[2]);
@@ -54,9 +59,10 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(INACTIVE)
     };
 
-    let title = match app.input_mode {
+    let title = match &app.input_mode {
         InputMode::Search => " Search (Active) ",
         InputMode::CreatePlaylist => " Create Playlist ",
+        InputMode::SelectPlaylist(_) => " Select Playlist ",
         InputMode::Normal => " Search ('/' to focus) ",
     };
 
@@ -66,8 +72,9 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
         .border_style(search_style)
         .title(title);
 
-    let val = match app.input_mode {
+    let val = match &app.input_mode {
         InputMode::CreatePlaylist => app.playlist_input.value(),
+        InputMode::SelectPlaylist(_) => "Use arrows to select playlist, Enter to confirm, Esc to cancel",
         _ => app.search_input.value(),
     };
     
@@ -83,7 +90,7 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(p, area);
     
-    match app.input_mode {
+    match &app.input_mode {
         InputMode::Search => {
             f.set_cursor_position((
                 area.x + 1 + app.search_input.visual_cursor() as u16,
@@ -96,7 +103,7 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
                 area.y + 1,
             ));
         }
-        InputMode::Normal => {}
+        _ => {}
     }
 }
 
@@ -107,11 +114,16 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(INACTIVE))
         .title(" Dopamine ");
 
+    let home_highlight = app.view == View::Home;
+    let artists_highlight = app.view == View::Artists;
+    let albums_highlight = app.view == View::Albums;
+    let playlists_highlight = app.view == View::Playlists || app.view == View::PlaylistDetail;
+
     let mut sidebar_items = vec![
-        Line::from(vec![Span::styled(if app.view == View::Home { "❯ Home" } else { "  Home" }, if app.view == View::Home { Style::default().fg(ACCENT).bold() } else { Style::default().fg(FG) })]),
-        Line::from(vec![Span::styled(if app.view == View::Artists { "❯ Artists" } else { "  Artists" }, if app.view == View::Artists { Style::default().fg(ACCENT).bold() } else { Style::default().fg(FG) })]),
-        Line::from(vec![Span::styled(if app.view == View::Albums { "❯ Albums" } else { "  Albums" }, if app.view == View::Albums { Style::default().fg(ACCENT).bold() } else { Style::default().fg(FG) })]),
-        Line::from(vec![Span::styled(if app.view == View::Playlists { "❯ Playlists" } else { "  Playlists" }, if app.view == View::Playlists { Style::default().fg(ACCENT).bold() } else { Style::default().fg(FG) })]),
+        Line::from(vec![Span::styled(if home_highlight { "❯ Home" } else { "  Home" }, if home_highlight { Style::default().fg(ACCENT).bold() } else { Style::default().fg(FG) })]),
+        Line::from(vec![Span::styled(if artists_highlight { "❯ Artists" } else { "  Artists" }, if artists_highlight { Style::default().fg(ACCENT).bold() } else { Style::default().fg(FG) })]),
+        Line::from(vec![Span::styled(if albums_highlight { "❯ Albums" } else { "  Albums" }, if albums_highlight { Style::default().fg(ACCENT).bold() } else { Style::default().fg(FG) })]),
+        Line::from(vec![Span::styled(if playlists_highlight { "❯ Playlists" } else { "  Playlists" }, if playlists_highlight { Style::default().fg(ACCENT).bold() } else { Style::default().fg(FG) })]),
         Line::from(vec![Span::styled(" ", Style::default())]),
     ];
 
@@ -132,8 +144,9 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     let title = match app.view {
-        View::Home => " All Tracks ",
-        _ => " Tracks ",
+        View::Home => " All Tracks ".to_string(),
+        View::PlaylistDetail => format!(" Playlist: {} ", app.selected_playlist.as_deref().unwrap_or("Unknown")),
+        _ => " Tracks ".to_string(),
     };
 
     let header_cells = ["Title", "Artist", "Album", "Time"]
@@ -168,7 +181,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Percentage(10),
     ])
     .header(header)
-    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(INACTIVE)).title(title))
+    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(INACTIVE)).title(title.as_str()))
     .row_highlight_style(Style::default().bg(Color::Rgb(49, 50, 68)).add_modifier(Modifier::BOLD))
     .highlight_symbol("❯ ");
 
@@ -202,13 +215,9 @@ fn draw_albums(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_playlists(f: &mut Frame, app: &mut App, area: Rect) {
-    let mut items: Vec<ListItem> = app.filtered_playlists.iter().map(|p| {
+    let items: Vec<ListItem> = app.filtered_playlists.iter().map(|p| {
         ListItem::new(p.as_str()).style(Style::default().fg(FG))
     }).collect();
-
-    if items.is_empty() {
-        items.push(ListItem::new("No playlists. Press '+' to create one.").style(Style::default().fg(INACTIVE)));
-    }
 
     let l = List::new(items)
         .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(INACTIVE)).title(" Playlists "))
@@ -216,6 +225,44 @@ fn draw_playlists(f: &mut Frame, app: &mut App, area: Rect) {
         .highlight_symbol("❯ ");
 
     f.render_stateful_widget(l, area, &mut app.list_state);
+}
+
+fn draw_select_playlist(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(60, 40, f.area());
+    let items: Vec<ListItem> = app.playlists.iter().map(|p| {
+        ListItem::new(p.as_str()).style(Style::default().fg(FG))
+    }).collect();
+
+    let l = List::new(items)
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .title(" Add to Playlist "))
+        .highlight_style(Style::default().bg(Color::Rgb(49, 50, 68)).fg(ACCENT).add_modifier(Modifier::BOLD))
+        .highlight_symbol("❯ ");
+
+    f.render_stateful_widget(l, area, &mut app.list_state);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn draw_player(f: &mut Frame, app: &App, area: Rect) {

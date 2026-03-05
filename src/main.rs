@@ -80,7 +80,7 @@ fn run_app(
 
         if event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = event::read()? {
-                match app.input_mode {
+                match &app.input_mode {
                     app::InputMode::Search => {
                         match key.code {
                             KeyCode::Enter | KeyCode::Esc => {
@@ -113,12 +113,26 @@ fn run_app(
                             }
                         }
                     }
+                    app::InputMode::SelectPlaylist(track) => {
+                        let track_clone = track.clone();
+                        match key.code {
+                            KeyCode::Enter => {
+                                app.confirm_add_to_playlist(track_clone);
+                            }
+                            KeyCode::Esc => {
+                                app.input_mode = app::InputMode::Normal;
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => app.previous(),
+                            KeyCode::Down | KeyCode::Char('j') => app.next(),
+                            _ => {}
+                        }
+                    }
                     app::InputMode::Normal => {
                         match key.code {
                             KeyCode::Char('q') => return Ok(()),
                             KeyCode::Char('/') => app.input_mode = app::InputMode::Search,
                             KeyCode::Char('+') => app.input_mode = app::InputMode::CreatePlaylist,
-                            KeyCode::Char('a') => app.add_current_to_playlist(),
+                            KeyCode::Char('a') => app.start_add_to_playlist(),
                             KeyCode::Char('s') => {
                                 if !app.scanning {
                                     app.scanning = true;
