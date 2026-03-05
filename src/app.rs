@@ -114,6 +114,7 @@ impl App {
 
     pub fn set_view(&mut self, view: View) {
         self.view = view;
+        self.search_input = Input::default(); // Clear search on view switch
         self.table_state.select(Some(0));
         self.list_state.select(Some(0));
         self.apply_search();
