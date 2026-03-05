@@ -15,11 +15,18 @@ pub enum View {
 }
 
 #[derive(Clone, PartialEq, Eq)]
+pub enum Confirmation {
+    Quit,
+    DeletePlaylist(String),
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub enum InputMode {
     Normal,
     Search,
     CreatePlaylist,
     SelectPlaylist(Track),
+    Confirm(Confirmation),
 }
 
 pub struct App {
@@ -45,6 +52,7 @@ pub struct App {
     pub input_mode: InputMode,
     pub current_track: Option<Track>,
     pub scanning: bool,
+    pub marquee_offset: usize,
 }
 
 impl App {
@@ -75,6 +83,7 @@ impl App {
             input_mode: InputMode::Normal,
             current_track: None,
             scanning: false,
+            marquee_offset: 0,
         })
     }
 
@@ -348,9 +357,16 @@ impl App {
         if self.current_track.is_some() && !self.audio.is_paused() && self.audio.is_empty() {
             self.play_next();
         }
+        self.marquee_offset = self.marquee_offset.wrapping_add(1);
     }
 
     pub fn toggle_playback(&mut self) {
         self.audio.toggle();
+    }
+
+    pub fn delete_playlist(&mut self, name: String) {
+        let _ = self.db.delete_playlist(&name);
+        let _ = self.load_tracks();
+        self.input_mode = InputMode::Normal;
     }
 }

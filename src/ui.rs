@@ -1,4 +1,4 @@
-use crate::app::{App, InputMode, View};
+use crate::app::{App, Confirmation, InputMode, View};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect, Alignment},
     style::{Color, Modifier, Style},
@@ -49,21 +49,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let InputMode::SelectPlaylist(_) = &app.input_mode {
         draw_select_playlist(f, app);
     }
+
+    if let InputMode::Confirm(conf) = &app.input_mode {
+        draw_confirmation(f, conf);
+    }
     
     draw_player(f, app, chunks[2]);
 }
 
 fn draw_search(f: &mut Frame, app: &App, area: Rect) {
-    let search_style = if app.input_mode != InputMode::Normal {
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(INACTIVE)
+    let search_style = match &app.input_mode {
+        InputMode::Normal => Style::default().fg(INACTIVE),
+        _ => Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
     };
 
     let title = match &app.input_mode {
         InputMode::Search => " Search (Active) ",
         InputMode::CreatePlaylist => " Create Playlist ",
         InputMode::SelectPlaylist(_) => " Select Playlist ",
+        InputMode::Confirm(_) => " Confirm Action ",
         InputMode::Normal => " Search ('/' to focus) ",
     };
 
@@ -76,6 +80,7 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     let val = match &app.input_mode {
         InputMode::CreatePlaylist => app.playlist_input.value(),
         InputMode::SelectPlaylist(_) => "Use arrows to select playlist, Enter to confirm, Esc to cancel",
+        InputMode::Confirm(_) => "Are you sure? (y/n)",
         _ => app.search_input.value(),
     };
     
@@ -138,6 +143,7 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     sidebar_items.push(Line::from(vec![Span::styled("  n/p: Next/Prev track", Style::default().fg(INACTIVE))]));
     sidebar_items.push(Line::from(vec![Span::styled("  +/-: Volume", Style::default().fg(INACTIVE))]));
     sidebar_items.push(Line::from(vec![Span::styled("  Ctrl-n: New Playlist", Style::default().fg(INACTIVE))]));
+    sidebar_items.push(Line::from(vec![Span::styled("  Del: Delete Playlist", Style::default().fg(INACTIVE))]));
     sidebar_items.push(Line::from(vec![Span::styled("  q: Quit", Style::default().fg(INACTIVE))]));
 
     let p = Paragraph::new(sidebar_items).block(block);
@@ -231,8 +237,6 @@ fn draw_playlists(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_select_playlist(f: &mut Frame, app: &mut App) {
     let area = centered_rect(60, 40, f.area());
-    
-    // Clear the background of the popup area
     f.render_widget(Clear, area);
 
     let items: Vec<ListItem> = app.playlists.iter().map(|p| {
@@ -244,12 +248,38 @@ fn draw_select_playlist(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(ACCENT))
-            .style(Style::default().bg(BG)) // Set a solid background color
+            .style(Style::default().bg(BG))
             .title(" Add to Playlist "))
         .highlight_style(Style::default().bg(Color::Rgb(49, 50, 68)).fg(ACCENT).add_modifier(Modifier::BOLD))
         .highlight_symbol("❯ ");
 
     f.render_stateful_widget(l, area, &mut app.playlist_select_state);
+}
+
+fn draw_confirmation(f: &mut Frame, conf: &Confirmation) {
+    let area = centered_rect(50, 20, f.area());
+    f.render_widget(Clear, area);
+
+    let title = match conf {
+        Confirmation::Quit => " Quit Dopamine? ",
+        Confirmation::DeletePlaylist(name) => " Delete Playlist? ",
+    };
+
+    let message = match conf {
+        Confirmation::Quit => "Are you sure you want to quit? (y/n)".to_string(),
+        Confirmation::DeletePlaylist(name) => format!("Delete '{}'? (y/n)", name),
+    };
+
+    let p = Paragraph::new(message)
+        .alignment(Alignment::Center)
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .style(Style::default().bg(BG))
+            .title(title));
+
+    f.render_widget(p, area);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -296,8 +326,23 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
         
         let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
 
-        format!(" {}  {} - {}  [{}] {:02}:{:02} / {:02}:{:02}  [Vol: {:>3}%]", 
-            state, track.title, track.artist, bar, pos_mins, pos_secs, total_mins, total_secs, (app.audio.volume() * 100.0) as i32)
+        // Marquee for Track and Artist if too long
+        let display_text = format!("{} - {}", track.title, track.artist);
+        let max_text_len = area.width.saturating_sub(55) as usize; // Subtract space for progress bar, vol, etc.
+        let final_text = if display_text.len() > max_text_len && max_text_len > 0 {
+            let padded = format!("{}   ", display_text);
+            let start = (app.marquee_offset / 2) % padded.len();
+            let mut result = String::new();
+            for i in 0..max_text_len {
+                result.push(padded.chars().nth((start + i) % padded.len()).unwrap_or(' '));
+            }
+            result
+        } else {
+            display_text
+        };
+
+        format!(" {}  {}  [{}] {:02}:{:02} / {:02}:{:02}  [Vol: {:>3}%]", 
+            state, final_text, bar, pos_mins, pos_secs, total_mins, total_secs, (app.audio.volume() * 100.0) as i32)
     } else {
         format!(" No track playing  [Vol: {:>3}%]", (app.audio.volume() * 100.0) as i32)
     };

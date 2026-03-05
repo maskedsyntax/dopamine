@@ -203,6 +203,11 @@ impl Db {
         Ok(())
     }
 
+    pub fn delete_playlist(&self, name: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM playlists WHERE name = ?1", [name])?;
+        Ok(())
+    }
+
     pub fn add_track_to_playlist(&self, playlist_name: &str, track_path: &str) -> Result<()> {
         let mut stmt = self.conn.prepare("SELECT id FROM playlists WHERE name = ?1")?;
         let playlist_id: i64 = stmt.query_row([playlist_name], |row| row.get(0))?;

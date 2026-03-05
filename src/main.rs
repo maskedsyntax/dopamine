@@ -6,7 +6,7 @@ mod models;
 mod ui;
 
 use anyhow::Result;
-use app::App;
+use app::{App, Confirmation, InputMode};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -65,7 +65,6 @@ fn run_app(
         app.tick();
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // Check for background messages
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 Message::ScanStarted => {
@@ -81,10 +80,10 @@ fn run_app(
         if event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = event::read()? {
                 match &app.input_mode {
-                    app::InputMode::Search => {
+                    InputMode::Search => {
                         match key.code {
                             KeyCode::Enter | KeyCode::Esc => {
-                                app.input_mode = app::InputMode::Normal;
+                                app.input_mode = InputMode::Normal;
                                 app.apply_search();
                             }
                             _ => {
@@ -93,7 +92,7 @@ fn run_app(
                             }
                         }
                     }
-                    app::InputMode::CreatePlaylist => {
+                    InputMode::CreatePlaylist => {
                         match key.code {
                             KeyCode::Enter => {
                                 let name = app.playlist_input.value().to_string();
@@ -101,11 +100,11 @@ fn run_app(
                                     let _ = app.db.create_playlist(&name);
                                     let _ = app.load_tracks();
                                 }
-                                app.input_mode = app::InputMode::Normal;
+                                app.input_mode = InputMode::Normal;
                                 app.playlist_input.reset();
                             }
                             KeyCode::Esc => {
-                                app.input_mode = app::InputMode::Normal;
+                                app.input_mode = InputMode::Normal;
                                 app.playlist_input.reset();
                             }
                             _ => {
@@ -113,28 +112,56 @@ fn run_app(
                             }
                         }
                     }
-                    app::InputMode::SelectPlaylist(track) => {
+                    InputMode::SelectPlaylist(track) => {
                         let track_clone = track.clone();
                         match key.code {
                             KeyCode::Enter => {
                                 app.confirm_add_to_playlist(track_clone);
                             }
                             KeyCode::Esc => {
-                                app.input_mode = app::InputMode::Normal;
+                                app.input_mode = InputMode::Normal;
                             }
                             KeyCode::Up | KeyCode::Char('k') => app.previous(),
                             KeyCode::Down | KeyCode::Char('j') => app.next(),
                             _ => {}
                         }
                     }
-                    app::InputMode::Normal => {
+                    InputMode::Confirm(conf) => {
+                        let conf_clone = conf.clone();
                         match key.code {
-                            KeyCode::Char('q') => return Ok(()),
-                            KeyCode::Char('/') => app.input_mode = app::InputMode::Search,
+                            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                match conf_clone {
+                                    Confirmation::Quit => return Ok(()),
+                                    Confirmation::DeletePlaylist(name) => {
+                                        app.delete_playlist(name);
+                                    }
+                                }
+                            }
+                            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                                app.input_mode = InputMode::Normal;
+                            }
+                            _ => {}
+                        }
+                    }
+                    InputMode::Normal => {
+                        match key.code {
+                            KeyCode::Char('q') => {
+                                app.input_mode = InputMode::Confirm(Confirmation::Quit);
+                            }
+                            KeyCode::Char('/') => app.input_mode = InputMode::Search,
                             KeyCode::Char('n') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                                app.input_mode = app::InputMode::CreatePlaylist;
+                                app.input_mode = InputMode::CreatePlaylist;
                             }
                             KeyCode::Char('a') => app.start_add_to_playlist(),
+                            KeyCode::Delete | KeyCode::Backspace => {
+                                if app.view == app::View::Playlists {
+                                    if let Some(idx) = app.list_state.selected() {
+                                        if let Some(name) = app.filtered_playlists.get(idx).cloned() {
+                                            app.input_mode = InputMode::Confirm(Confirmation::DeletePlaylist(name));
+                                        }
+                                    }
+                                }
+                            }
                             KeyCode::Char('s') => {
                                 if !app.scanning {
                                     app.scanning = true;
