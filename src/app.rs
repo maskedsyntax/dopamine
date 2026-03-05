@@ -1,6 +1,5 @@
 use crate::audio::AudioEngine;
 use crate::db::Db;
-use crate::library::scan_library;
 use crate::models::Track;
 use anyhow::Result;
 use ratatui::widgets::{TableState, ListState};
@@ -24,6 +23,8 @@ pub struct App {
     pub filtered_tracks: Vec<Track>,
     pub filtered_artists: Vec<String>,
     pub filtered_albums: Vec<String>,
+    pub queue: Vec<Track>,
+    pub queue_index: usize,
     pub table_state: TableState,
     pub list_state: ListState,
     pub search_input: Input,
@@ -47,6 +48,8 @@ impl App {
             filtered_tracks: Vec::new(),
             filtered_artists: Vec::new(),
             filtered_albums: Vec::new(),
+            queue: Vec::new(),
+            queue_index: 0,
             table_state: TableState::default(),
             list_state: ListState::default(),
             search_input: Input::default(),
@@ -185,6 +188,8 @@ impl App {
             View::Home => {
                 if let Some(idx) = self.table_state.selected() {
                     if let Some(track) = self.filtered_tracks.get(idx) {
+                        self.queue = self.filtered_tracks.clone();
+                        self.queue_index = idx;
                         self.current_track = Some(track.clone());
                         self.audio.play(&track.path);
                     }
@@ -216,25 +221,35 @@ impl App {
         }
     }
 
-    pub fn toggle_playback(&mut self) {
-        self.audio.toggle();
+    pub fn play_next(&mut self) {
+        if self.queue.is_empty() { return; }
+        self.queue_index = (self.queue_index + 1) % self.queue.len();
+        if let Some(track) = self.queue.get(self.queue_index).cloned() {
+            self.current_track = Some(track.clone());
+            self.audio.play(&track.path);
+        }
     }
 
-    pub fn scan_library(&mut self) {
-        let music_dir = dirs::audio_dir().or_else(|| {
-            dirs::home_dir().map(|h| h.join("Music"))
-        });
-
-        if let Some(dir) = music_dir {
-            self.scanning = true;
-            let dir_str = dir.to_str().unwrap_or_default();
-            let tracks = scan_library(dir_str);
-            for t in tracks {
-                let _ = self.db.insert_track(&t);
-            }
-            let _ = self.db.cleanup_stale_tracks();
-            let _ = self.load_tracks();
-            self.scanning = false;
+    pub fn play_prev(&mut self) {
+        if self.queue.is_empty() { return; }
+        if self.queue_index == 0 {
+            self.queue_index = self.queue.len() - 1;
+        } else {
+            self.queue_index -= 1;
         }
+        if let Some(track) = self.queue.get(self.queue_index).cloned() {
+            self.current_track = Some(track.clone());
+            self.audio.play(&track.path);
+        }
+    }
+
+    pub fn tick(&mut self) {
+        if self.current_track.is_some() && !self.audio.is_paused() && self.audio.is_empty() {
+            self.play_next();
+        }
+    }
+
+    pub fn toggle_playback(&mut self) {
+        self.audio.toggle();
     }
 }

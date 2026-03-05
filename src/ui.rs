@@ -104,7 +104,10 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
         sidebar_items.push(Line::from(vec![Span::styled("  Press 's' to scan", Style::default().fg(INACTIVE))]));
     }
     
-    sidebar_items.push(Line::from(vec![Span::styled("  Press 'q' to quit", Style::default().fg(INACTIVE))]));
+    sidebar_items.push(Line::from(vec![Span::styled(" ", Style::default())]));
+    sidebar_items.push(Line::from(vec![Span::styled("  n/p: Next/Prev track", Style::default().fg(INACTIVE))]));
+    sidebar_items.push(Line::from(vec![Span::styled("  +/-: Volume", Style::default().fg(INACTIVE))]));
+    sidebar_items.push(Line::from(vec![Span::styled("  q: Quit", Style::default().fg(INACTIVE))]));
 
     let p = Paragraph::new(sidebar_items).block(block);
     f.render_widget(p, area);
@@ -189,9 +192,9 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
 
     let content = if let Some(track) = &app.current_track {
         let state = if app.audio.is_paused() { "⏸" } else { "▶" };
-        format!(" {}  {} - {}", state, track.title, track.artist)
+        format!(" {}  {} - {}  [Vol: {:>3}%]", state, track.title, track.artist, (app.audio.volume() * 100.0) as i32)
     } else {
-        " No track playing".to_string()
+        format!(" No track playing  [Vol: {:>3}%]", (app.audio.volume() * 100.0) as i32)
     };
 
     let p = Paragraph::new(content)

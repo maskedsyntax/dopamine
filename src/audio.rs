@@ -7,6 +7,7 @@ pub struct AudioEngine {
     _sink_handle: MixerDeviceSink,
     player: Player,
     paused: bool,
+    volume: f32,
 }
 
 impl AudioEngine {
@@ -14,11 +15,13 @@ impl AudioEngine {
         let sink_handle = DeviceSinkBuilder::open_default_sink()
             .map_err(|_| anyhow::anyhow!("Failed to open default audio stream"))?;
         let player = Player::connect_new(&sink_handle.mixer());
+        player.set_volume(0.5);
 
         Ok(Self {
             _sink_handle: sink_handle,
             player,
             paused: false,
+            volume: 0.5,
         })
     }
 
@@ -27,6 +30,7 @@ impl AudioEngine {
             if let Ok(decoder) = Decoder::try_from(BufReader::new(file)) {
                 self.player.clear();
                 self.player.append(decoder);
+                self.player.set_volume(self.volume);
                 self.player.play();
                 self.paused = false;
             }
@@ -45,7 +49,20 @@ impl AudioEngine {
         self.paused = !self.paused;
     }
 
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
+        self.player.set_volume(self.volume);
+    }
+
+    pub fn volume(&self) -> f32 {
+        self.volume
+    }
+
     pub fn is_paused(&self) -> bool {
         self.paused
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.player.empty()
     }
 }

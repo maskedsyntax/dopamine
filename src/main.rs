@@ -62,6 +62,7 @@ fn run_app(
     rx: mpsc::Receiver<Message>,
 ) -> io::Result<()> {
     loop {
+        app.tick();
         terminal.draw(|f| ui::draw(f, app))?;
 
         // Check for background messages
@@ -77,7 +78,7 @@ fn run_app(
             }
         }
 
-        if event::poll(Duration::from_millis(50))? {
+        if event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = event::read()? {
                 if app.input_mode {
                     match key.code {
@@ -104,7 +105,7 @@ fn run_app(
                                 std::thread::spawn(move || {
                                     let _ = tx_clone.send(Message::ScanStarted);
                                     if let Ok(db) = db::Db::new(&db_path_str) {
-                                        let _ = db.clear_db(); // Nuke the DB before scanning
+                                        let _ = db.clear_db();
                                         let music_dir = dirs::audio_dir().or_else(|| {
                                             dirs::home_dir().map(|h| h.join("Music"))
                                         });
@@ -113,6 +114,7 @@ fn run_app(
                                             for t in tracks {
                                                 let _ = db.insert_track(&t);
                                             }
+                                            let _ = db.cleanup_stale_tracks();
                                         }
                                     }
                                     let _ = tx_clone.send(Message::ScanFinished);
@@ -123,6 +125,16 @@ fn run_app(
                         KeyCode::Char('2') => app.set_view(app::View::Artists),
                         KeyCode::Char('3') => app.set_view(app::View::Albums),
                         KeyCode::Char('4') => app.set_view(app::View::Playlists),
+                        KeyCode::Char('n') => app.play_next(),
+                        KeyCode::Char('p') => app.play_prev(),
+                        KeyCode::Char('+') | KeyCode::Char('=') => {
+                            let v = app.audio.volume();
+                            app.audio.set_volume(v + 0.05);
+                        }
+                        KeyCode::Char('-') | KeyCode::Char('_') => {
+                            let v = app.audio.volume();
+                            app.audio.set_volume(v - 0.05);
+                        }
                         KeyCode::Up | KeyCode::Char('k') => app.previous(),
                         KeyCode::Down | KeyCode::Char('j') => app.next(),
                         KeyCode::Enter => app.play_selected(),
