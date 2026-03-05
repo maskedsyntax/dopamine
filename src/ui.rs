@@ -192,7 +192,24 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
 
     let content = if let Some(track) = &app.current_track {
         let state = if app.audio.is_paused() { "⏸" } else { "▶" };
-        format!(" {}  {} - {}  [Vol: {:>3}%]", state, track.title, track.artist, (app.audio.volume() * 100.0) as i32)
+        
+        let pos = app.audio.position().as_secs();
+        let total = track.duration_secs.max(0) as u64;
+        
+        let pos_mins = pos / 60;
+        let pos_secs = pos % 60;
+        let total_mins = total / 60;
+        let total_secs = total % 60;
+
+        let progress = if total > 0 { (pos as f64 / total as f64).clamp(0.0, 1.0) } else { 0.0 };
+        let bar_width: usize = 25;
+        let filled = (progress * bar_width as f64).round() as usize;
+        let empty = bar_width.saturating_sub(filled);
+        
+        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+
+        format!(" {}  {} - {}  [{}] {:02}:{:02} / {:02}:{:02}  [Vol: {:>3}%]", 
+            state, track.title, track.artist, bar, pos_mins, pos_secs, total_mins, total_secs, (app.audio.volume() * 100.0) as i32)
     } else {
         format!(" No track playing  [Vol: {:>3}%]", (app.audio.volume() * 100.0) as i32)
     };

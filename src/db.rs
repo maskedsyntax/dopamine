@@ -31,6 +31,24 @@ impl Db {
             [],
         )?;
         
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS playlists (
+                id INTEGER PRIMARY KEY,
+                name TEXT UNIQUE
+            )",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS playlist_tracks (
+                playlist_id INTEGER,
+                track_path TEXT,
+                FOREIGN KEY(playlist_id) REFERENCES playlists(id),
+                FOREIGN KEY(track_path) REFERENCES tracks(path) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
         // Final cleanup for any duplicates that bypassed constraints
         self.conn.execute(
             "DELETE FROM tracks WHERE rowid NOT IN (SELECT MIN(rowid) FROM tracks GROUP BY path)",
@@ -148,6 +166,54 @@ impl Db {
         )?;
         let tracks = stmt
             .query_map([], |row| {
+                Ok(Track {
+                    path: row.get(0)?,
+                    title: row.get(1)?,
+                    artist: row.get(2)?,
+                    album: row.get(3)?,
+                    duration_secs: row.get(4)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(tracks)
+    }
+
+    pub fn get_playlists(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT name FROM playlists ORDER BY name")?;
+        let playlists = stmt
+            .query_map([], |row| row.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(playlists)
+    }
+
+    pub fn create_playlist(&self, name: &str) -> Result<()> {
+        self.conn.execute("INSERT OR IGNORE INTO playlists (name) VALUES (?1)", [name])?;
+        Ok(())
+    }
+
+    pub fn add_track_to_playlist(&self, playlist_name: &str, track_path: &str) -> Result<()> {
+        let mut stmt = self.conn.prepare("SELECT id FROM playlists WHERE name = ?1")?;
+        let playlist_id: i64 = stmt.query_row([playlist_name], |row| row.get(0))?;
+
+        self.conn.execute(
+            "INSERT INTO playlist_tracks (playlist_id, track_path) VALUES (?1, ?2)",
+            params![playlist_id, track_path],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_tracks_by_playlist(&self, playlist_name: &str) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.path, t.title, t.artist, t.album, t.duration 
+             FROM tracks t
+             JOIN playlist_tracks pt ON t.path = pt.track_path
+             JOIN playlists p ON pt.playlist_id = p.id
+             WHERE p.name = ?1"
+        )?;
+        let tracks = stmt
+            .query_map([playlist_name], |row| {
                 Ok(Track {
                     path: row.get(0)?,
                     title: row.get(1)?,

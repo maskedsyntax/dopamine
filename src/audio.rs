@@ -2,6 +2,7 @@ use anyhow::Result;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player};
 use std::fs::File;
 use std::io::BufReader;
+use std::time::Duration;
 
 pub struct AudioEngine {
     _sink_handle: MixerDeviceSink,
@@ -64,5 +65,9 @@ impl AudioEngine {
 
     pub fn is_empty(&self) -> bool {
         self.player.empty()
+    }
+
+    pub fn position(&self) -> Duration {
+        self.player.get_pos()
     }
 }
