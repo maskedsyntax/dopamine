@@ -398,8 +398,8 @@ impl App {
                 .iter()
                 .map(|c| (c.re * c.re + c.im * c.im).sqrt())
                 .sum();
-            let val = (sum / chunk_size as f32) * 4.0;
-            self.visualizer_data[i] = (val.clamp(0.0, 1.0) * 0.2) + (self.visualizer_data[i] * 0.8);
+            let val = (sum / chunk_size as f32) * 6.0;
+            self.visualizer_data[i] = (val.clamp(0.0, 1.0) * 0.5) + (self.visualizer_data[i] * 0.5);
         }
     }
 

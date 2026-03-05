@@ -325,16 +325,20 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(inner);
 
-    // 1. Visualizer
+    // 1. Visualizer with micro gaps
     let num_bars = app.visualizer_data.len();
     let viz_width = chunks[0].width as usize;
     let mut bars = String::new();
     let bar_chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
     for i in 0..viz_width {
-        let data_idx = (i * num_bars) / viz_width;
-        let val = app.visualizer_data[data_idx];
-        let char_idx = (val * (bar_chars.len() - 1) as f32).round() as usize;
-        bars.push_str(bar_chars[char_idx.clamp(0, bar_chars.len() - 1)]);
+        if i % 2 == 0 {
+            let data_idx = (i / 2 * num_bars) / (viz_width / 2);
+            let val = app.visualizer_data[data_idx.clamp(0, num_bars - 1)];
+            let char_idx = (val * (bar_chars.len() - 1) as f32).round() as usize;
+            bars.push_str(bar_chars[char_idx.clamp(0, bar_chars.len() - 1)]);
+        } else {
+            bars.push(' '); // Micro gap
+        }
     }
     f.render_widget(Paragraph::new(bars).style(Style::default().fg(ACCENT)), chunks[0]);
 
