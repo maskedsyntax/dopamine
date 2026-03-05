@@ -15,8 +15,8 @@ impl Db {
     pub fn init(&self) -> Result<()> {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS tracks (
-                id INTEGER PRIMARY KEY,
-                path TEXT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT UNIQUE,
                 title TEXT,
                 artist TEXT,
                 album TEXT,
@@ -32,18 +32,29 @@ impl Db {
         
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS playlists (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE
             )",
             [],
         )?;
+
+        // Check if playlist_tracks has the old schema (track_id)
+        let has_track_id: bool = self.conn.query_row(
+            "SELECT count(*) FROM pragma_table_info('playlist_tracks') WHERE name='track_id'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).unwrap_or(0) > 0;
+
+        if has_track_id {
+            let _ = self.conn.execute("DROP TABLE playlist_tracks", []);
+        }
 
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS playlist_tracks (
                 playlist_id INTEGER,
                 track_path TEXT,
                 PRIMARY KEY(playlist_id, track_path),
-                FOREIGN KEY(playlist_id) REFERENCES playlists(id),
+                FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
                 FOREIGN KEY(track_path) REFERENCES tracks(path) ON DELETE CASCADE
             )",
             [],
