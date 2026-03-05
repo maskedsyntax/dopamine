@@ -1,4 +1,4 @@
-use crate::app::{App, View};
+use crate::app::{App, InputMode, View};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect, Alignment},
     style::{Color, Modifier, Style},
@@ -41,20 +41,24 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         View::Home => draw_table(f, app, main_chunks[1]),
         View::Artists => draw_artists(f, app, main_chunks[1]),
         View::Albums => draw_albums(f, app, main_chunks[1]),
-        _ => draw_table(f, app, main_chunks[1]),
+        View::Playlists => draw_playlists(f, app, main_chunks[1]),
     }
     
     draw_player(f, app, chunks[2]);
 }
 
 fn draw_search(f: &mut Frame, app: &App, area: Rect) {
-    let search_style = if app.input_mode {
+    let search_style = if app.input_mode != InputMode::Normal {
         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(INACTIVE)
     };
 
-    let title = if app.input_mode { " Search (Active) " } else { " Search ('/' to focus) " };
+    let title = match app.input_mode {
+        InputMode::Search => " Search (Active) ",
+        InputMode::CreatePlaylist => " Create Playlist ",
+        InputMode::Normal => " Search ('/' to focus) ",
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -62,8 +66,12 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
         .border_style(search_style)
         .title(title);
 
-    let val = app.search_input.value();
-    let text = if val.is_empty() && !app.input_mode {
+    let val = match app.input_mode {
+        InputMode::CreatePlaylist => app.playlist_input.value(),
+        _ => app.search_input.value(),
+    };
+    
+    let text = if val.is_empty() && app.input_mode == InputMode::Normal {
         "..."
     } else {
         val
@@ -75,11 +83,20 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(p, area);
     
-    if app.input_mode {
-        f.set_cursor_position((
-            area.x + 1 + app.search_input.visual_cursor() as u16,
-            area.y + 1,
-        ));
+    match app.input_mode {
+        InputMode::Search => {
+            f.set_cursor_position((
+                area.x + 1 + app.search_input.visual_cursor() as u16,
+                area.y + 1,
+            ));
+        }
+        InputMode::CreatePlaylist => {
+            f.set_cursor_position((
+                area.x + 1 + app.playlist_input.visual_cursor() as u16,
+                area.y + 1,
+            ));
+        }
+        InputMode::Normal => {}
     }
 }
 
@@ -178,6 +195,23 @@ fn draw_albums(f: &mut Frame, app: &mut App, area: Rect) {
 
     let l = List::new(items)
         .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(INACTIVE)).title(" Albums "))
+        .highlight_style(Style::default().bg(Color::Rgb(49, 50, 68)).fg(ACCENT).add_modifier(Modifier::BOLD))
+        .highlight_symbol("❯ ");
+
+    f.render_stateful_widget(l, area, &mut app.list_state);
+}
+
+fn draw_playlists(f: &mut Frame, app: &mut App, area: Rect) {
+    let mut items: Vec<ListItem> = app.filtered_playlists.iter().map(|p| {
+        ListItem::new(p.as_str()).style(Style::default().fg(FG))
+    }).collect();
+
+    if items.is_empty() {
+        items.push(ListItem::new("No playlists. Press '+' to create one.").style(Style::default().fg(INACTIVE)));
+    }
+
+    let l = List::new(items)
+        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(INACTIVE)).title(" Playlists "))
         .highlight_style(Style::default().bg(Color::Rgb(49, 50, 68)).fg(ACCENT).add_modifier(Modifier::BOLD))
         .highlight_symbol("❯ ");
 

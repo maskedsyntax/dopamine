@@ -13,6 +13,13 @@ pub enum View {
     Playlists,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Normal,
+    Search,
+    CreatePlaylist,
+}
+
 pub struct App {
     pub db: Db,
     pub audio: AudioEngine,
@@ -20,15 +27,18 @@ pub struct App {
     pub tracks: Vec<Track>,
     pub artists: Vec<String>,
     pub albums: Vec<String>,
+    pub playlists: Vec<String>,
     pub filtered_tracks: Vec<Track>,
     pub filtered_artists: Vec<String>,
     pub filtered_albums: Vec<String>,
+    pub filtered_playlists: Vec<String>,
     pub queue: Vec<Track>,
     pub queue_index: usize,
     pub table_state: TableState,
     pub list_state: ListState,
     pub search_input: Input,
-    pub input_mode: bool,
+    pub playlist_input: Input,
+    pub input_mode: InputMode,
     pub current_track: Option<Track>,
     pub scanning: bool,
 }
@@ -45,15 +55,18 @@ impl App {
             tracks: Vec::new(),
             artists: Vec::new(),
             albums: Vec::new(),
+            playlists: Vec::new(),
             filtered_tracks: Vec::new(),
             filtered_artists: Vec::new(),
             filtered_albums: Vec::new(),
+            filtered_playlists: Vec::new(),
             queue: Vec::new(),
             queue_index: 0,
             table_state: TableState::default(),
             list_state: ListState::default(),
             search_input: Input::default(),
-            input_mode: false,
+            playlist_input: Input::default(),
+            input_mode: InputMode::Normal,
             current_track: None,
             scanning: false,
         })
@@ -63,6 +76,7 @@ impl App {
         self.tracks = self.db.get_all_tracks()?;
         self.artists = self.db.get_artists()?;
         self.albums = self.db.get_albums()?;
+        self.playlists = self.db.get_playlists()?;
         self.apply_search();
         Ok(())
     }
@@ -104,7 +118,17 @@ impl App {
                         .collect();
                 }
             }
-            _ => {}
+            View::Playlists => {
+                if query.is_empty() {
+                    self.filtered_playlists = self.playlists.clone();
+                } else {
+                    self.filtered_playlists = self.playlists
+                        .iter()
+                        .filter(|p| p.to_lowercase().contains(&query))
+                        .cloned()
+                        .collect();
+                }
+            }
         }
 
         if self.table_state.selected().is_none() {
@@ -149,7 +173,14 @@ impl App {
                 };
                 self.list_state.select(Some(i));
             }
-            _ => {}
+            View::Playlists => {
+                let len = self.filtered_playlists.len();
+                let i = match self.list_state.selected() {
+                    Some(i) => if i >= len.saturating_sub(1) { 0 } else { i + 1 },
+                    None => 0,
+                };
+                self.list_state.select(Some(i));
+            }
         }
     }
 
@@ -179,7 +210,14 @@ impl App {
                 };
                 self.list_state.select(Some(i));
             }
-            _ => {}
+            View::Playlists => {
+                let len = self.filtered_playlists.len();
+                let i = match self.list_state.selected() {
+                    Some(i) => if i == 0 { len.saturating_sub(1) } else { i - 1 },
+                    None => 0,
+                };
+                self.list_state.select(Some(i));
+            }
         }
     }
 
@@ -217,7 +255,29 @@ impl App {
                     }
                 }
             }
-            _ => {}
+            View::Playlists => {
+                if let Some(idx) = self.list_state.selected() {
+                    if let Some(playlist) = self.filtered_playlists.get(idx).cloned() {
+                        if let Ok(tracks) = self.db.get_tracks_by_playlist(&playlist) {
+                            self.filtered_tracks = tracks;
+                            self.view = View::Home;
+                            self.table_state.select(Some(0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn add_current_to_playlist(&mut self) {
+        if let Some(track) = &self.current_track {
+            if let Some(idx) = self.list_state.selected() {
+                if self.view == View::Playlists {
+                    if let Some(playlist) = self.filtered_playlists.get(idx).cloned() {
+                        let _ = self.db.add_track_to_playlist(&playlist, &track.path);
+                    }
+                }
+            }
         }
     }
 

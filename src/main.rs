@@ -80,66 +80,91 @@ fn run_app(
 
         if event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = event::read()? {
-                if app.input_mode {
-                    match key.code {
-                        KeyCode::Enter | KeyCode::Esc => {
-                            app.input_mode = false;
-                            app.apply_search();
-                        }
-                        _ => {
-                            app.search_input.handle_event(&Event::Key(key));
-                            app.apply_search();
-                        }
-                    }
-                } else {
-                    match key.code {
-                        KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Char('/') => app.input_mode = true,
-                        KeyCode::Char('s') => {
-                            if !app.scanning {
-                                app.scanning = true;
-                                let tx_clone = tx.clone();
-                                let db_path = dirs::config_dir().unwrap_or_default().join("dopamine").join("library.db");
-                                let db_path_str = db_path.to_str().unwrap().to_string();
-                                
-                                std::thread::spawn(move || {
-                                    let _ = tx_clone.send(Message::ScanStarted);
-                                    if let Ok(db) = db::Db::new(&db_path_str) {
-                                        let _ = db.clear_db();
-                                        let music_dir = dirs::audio_dir().or_else(|| {
-                                            dirs::home_dir().map(|h| h.join("Music"))
-                                        });
-                                        if let Some(dir) = music_dir {
-                                            let tracks = library::scan_library(dir.to_str().unwrap());
-                                            for t in tracks {
-                                                let _ = db.insert_track(&t);
-                                            }
-                                            let _ = db.cleanup_stale_tracks();
-                                        }
-                                    }
-                                    let _ = tx_clone.send(Message::ScanFinished);
-                                });
+                match app.input_mode {
+                    app::InputMode::Search => {
+                        match key.code {
+                            KeyCode::Enter | KeyCode::Esc => {
+                                app.input_mode = app::InputMode::Normal;
+                                app.apply_search();
+                            }
+                            _ => {
+                                app.search_input.handle_event(&Event::Key(key));
+                                app.apply_search();
                             }
                         }
-                        KeyCode::Char('1') => app.set_view(app::View::Home),
-                        KeyCode::Char('2') => app.set_view(app::View::Artists),
-                        KeyCode::Char('3') => app.set_view(app::View::Albums),
-                        KeyCode::Char('4') => app.set_view(app::View::Playlists),
-                        KeyCode::Char('n') => app.play_next(),
-                        KeyCode::Char('p') => app.play_prev(),
-                        KeyCode::Char('+') | KeyCode::Char('=') => {
-                            let v = app.audio.volume();
-                            app.audio.set_volume(v + 0.05);
+                    }
+                    app::InputMode::CreatePlaylist => {
+                        match key.code {
+                            KeyCode::Enter => {
+                                let name = app.playlist_input.value().to_string();
+                                if !name.is_empty() {
+                                    let _ = app.db.create_playlist(&name);
+                                    let _ = app.load_tracks();
+                                }
+                                app.input_mode = app::InputMode::Normal;
+                                app.playlist_input.reset();
+                            }
+                            KeyCode::Esc => {
+                                app.input_mode = app::InputMode::Normal;
+                                app.playlist_input.reset();
+                            }
+                            _ => {
+                                app.playlist_input.handle_event(&Event::Key(key));
+                            }
                         }
-                        KeyCode::Char('-') | KeyCode::Char('_') => {
-                            let v = app.audio.volume();
-                            app.audio.set_volume(v - 0.05);
+                    }
+                    app::InputMode::Normal => {
+                        match key.code {
+                            KeyCode::Char('q') => return Ok(()),
+                            KeyCode::Char('/') => app.input_mode = app::InputMode::Search,
+                            KeyCode::Char('+') => app.input_mode = app::InputMode::CreatePlaylist,
+                            KeyCode::Char('a') => app.add_current_to_playlist(),
+                            KeyCode::Char('s') => {
+                                if !app.scanning {
+                                    app.scanning = true;
+                                    let tx_clone = tx.clone();
+                                    let db_path = dirs::config_dir().unwrap_or_default().join("dopamine").join("library.db");
+                                    let db_path_str = db_path.to_str().unwrap().to_string();
+                                    
+                                    std::thread::spawn(move || {
+                                        let _ = tx_clone.send(Message::ScanStarted);
+                                        if let Ok(db) = db::Db::new(&db_path_str) {
+                                            let _ = db.clear_db();
+                                            let music_dir = dirs::audio_dir().or_else(|| {
+                                                dirs::home_dir().map(|h| h.join("Music"))
+                                            });
+                                            if let Some(dir) = music_dir {
+                                                let tracks = library::scan_library(dir.to_str().unwrap());
+                                                for t in tracks {
+                                                    let _ = db.insert_track(&t);
+                                                }
+                                                let _ = db.cleanup_stale_tracks();
+                                            }
+                                        }
+                                        let _ = tx_clone.send(Message::ScanFinished);
+                                    });
+                                }
+                            }
+                            KeyCode::Char('1') => app.set_view(app::View::Home),
+                            KeyCode::Char('2') => app.set_view(app::View::Artists),
+                            KeyCode::Char('3') => app.set_view(app::View::Albums),
+                            KeyCode::Char('4') => app.set_view(app::View::Playlists),
+                            KeyCode::Char('n') => app.play_next(),
+                            KeyCode::Char('p') => app.play_prev(),
+                            KeyCode::Char('=') => {
+                                let v = app.audio.volume();
+                                app.audio.set_volume(v + 0.05);
+                            }
+                            KeyCode::Char('-') | KeyCode::Char('_') => {
+                                let v = app.audio.volume();
+                                app.audio.set_volume(v - 0.05);
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => app.previous(),
+                            KeyCode::Down | KeyCode::Char('j') => app.next(),
+                            KeyCode::Enter => app.play_selected(),
+                            KeyCode::Char(' ') => app.toggle_playback(),
+                            _ => {}
                         }
-                        KeyCode::Up | KeyCode::Char('k') => app.previous(),
-                        KeyCode::Down | KeyCode::Char('j') => app.next(),
-                        KeyCode::Enter => app.play_selected(),
-                        KeyCode::Char(' ') => app.toggle_playback(),
-                        _ => {}
                     }
                 }
             }
