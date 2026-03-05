@@ -379,26 +379,28 @@ impl App {
             return;
         }
 
-        // NON-BLOCKING LOCK: UI thread tries to read samples. If audio is busy, just skip.
-        if let Ok(samples) = self.audio.samples.try_lock() {
-            for (i, s) in samples.iter().enumerate() {
-                self.fft_buffer[i] = Complex { re: s.load(Ordering::Relaxed) as f32 / 1000000.0, im: 0.0 };
+        // Lock-free access to atomic samples
+        for (i, s) in self.audio.samples.iter().enumerate() {
+            if i < self.fft_buffer.len() {
+                self.fft_buffer[i] = Complex { 
+                    re: s.load(Ordering::Relaxed) as f32 / 1000000.0, 
+                    im: 0.0 
+                };
             }
-            drop(samples); 
+        }
 
-            self.fft_plan.process(&mut self.fft_buffer);
+        self.fft_plan.process(&mut self.fft_buffer);
 
-            let num_bars = self.visualizer_data.len();
-            let chunk_size = (self.fft_buffer.len() / 2) / num_bars;
-            
-            for i in 0..num_bars {
-                let sum: f32 = self.fft_buffer[i * chunk_size..(i + 1) * chunk_size]
-                    .iter()
-                    .map(|c| (c.re * c.re + c.im * c.im).sqrt())
-                    .sum();
-                let val = (sum / chunk_size as f32) * 6.0;
-                self.visualizer_data[i] = (val.clamp(0.0, 1.0) * 0.5) + (self.visualizer_data[i] * 0.5);
-            }
+        let num_bars = self.visualizer_data.len();
+        let chunk_size = (self.fft_buffer.len() / 2) / num_bars;
+        
+        for i in 0..num_bars {
+            let sum: f32 = self.fft_buffer[i * chunk_size..(i + 1) * chunk_size]
+                .iter()
+                .map(|c| (c.re * c.re + c.im * c.im).sqrt())
+                .sum();
+            let val = (sum / chunk_size as f32) * 6.0;
+            self.visualizer_data[i] = (val.clamp(0.0, 1.0) * 0.5) + (self.visualizer_data[i] * 0.5);
         }
     }
 
