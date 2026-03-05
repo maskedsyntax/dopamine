@@ -308,30 +308,36 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(PRIMARY));
 
-    let content = if let Some(track) = &app.current_track {
-        let state = if app.audio.is_paused() { "⏸" } else { "▶" };
-        
-        let pos = app.audio.position().as_secs();
-        let total = track.duration_secs.max(0) as u64;
-        
-        let pos_mins = pos / 60;
-        let pos_secs = pos % 60;
-        let total_mins = total / 60;
-        let total_secs = total % 60;
+    f.render_widget(block, area);
 
-        let progress = if total > 0 { (pos as f64 / total as f64).clamp(0.0, 1.0) } else { 0.0 };
-        let bar_width: usize = 25;
-        let filled = (progress * bar_width as f64).round() as usize;
-        let empty = bar_width.saturating_sub(filled);
-        
-        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+    let inner = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1);
+    
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(4),  // Play/Pause icon
+            Constraint::Min(10),    // Marquee text
+            Constraint::Length(27), // Progress bar
+            Constraint::Length(15), // Time
+            Constraint::Length(12), // Volume
+        ])
+        .split(inner);
 
-        // Marquee for Track and Artist if too long
-        let display_text = format!("{} - {}", track.title, track.artist);
-        let max_text_len = area.width.saturating_sub(55) as usize; // Subtract space for progress bar, vol, etc.
+    // 1. Play/Pause icon
+    let state = if app.audio.is_paused() { " ▶ " } else { " ⏸ " };
+    f.render_widget(Paragraph::new(state).style(Style::default().fg(FG).bold()), chunks[0]);
+
+    // 5. Volume
+    let vol = format!(" Vol: {:>3}%", (app.audio.volume() * 100.0) as i32);
+    f.render_widget(Paragraph::new(vol).style(Style::default().fg(FG).bold()).alignment(Alignment::Right), chunks[4]);
+
+    if let Some(track) = &app.current_track {
+        // 2. Marquee Text
+        let display_text = format!(" {} - {}", track.title, track.artist);
+        let max_text_len = chunks[1].width as usize;
         let final_text = if display_text.len() > max_text_len && max_text_len > 0 {
             let padded = format!("{}   ", display_text);
-            let start = (app.marquee_offset / 2) % padded.len();
+            let start = (app.marquee_offset / 4) % padded.len(); // Slower speed
             let mut result = String::new();
             for i in 0..max_text_len {
                 result.push(padded.chars().nth((start + i) % padded.len()).unwrap_or(' '));
@@ -340,17 +346,26 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
         } else {
             display_text
         };
+        f.render_widget(Paragraph::new(final_text).style(Style::default().fg(FG).bold()), chunks[1]);
 
-        format!(" {}  {}  [{}] {:02}:{:02} / {:02}:{:02}  [Vol: {:>3}%]", 
-            state, final_text, bar, pos_mins, pos_secs, total_mins, total_secs, (app.audio.volume() * 100.0) as i32)
+        // 3. Progress Bar
+        let pos = app.audio.position().as_secs();
+        let total = track.duration_secs.max(0) as u64;
+        let progress = if total > 0 { (pos as f64 / total as f64).clamp(0.0, 1.0) } else { 0.0 };
+        let bar_width = (chunks[2].width as usize).saturating_sub(2);
+        let filled = (progress * bar_width as f64).round() as usize;
+        let empty = bar_width.saturating_sub(filled);
+        let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
+        f.render_widget(Paragraph::new(bar).style(Style::default().fg(FG)), chunks[2]);
+
+        // 4. Time
+        let pos_mins = pos / 60;
+        let pos_secs = pos % 60;
+        let total_mins = total / 60;
+        let total_secs = total % 60;
+        let time_str = format!(" {:02}:{:02} / {:02}:{:02}", pos_mins, pos_secs, total_mins, total_secs);
+        f.render_widget(Paragraph::new(time_str).style(Style::default().fg(FG).bold()), chunks[3]);
     } else {
-        format!(" No track playing  [Vol: {:>3}%]", (app.audio.volume() * 100.0) as i32)
-    };
-
-    let p = Paragraph::new(content)
-        .style(Style::default().fg(FG).bold())
-        .block(block)
-        .alignment(Alignment::Left);
-
-    f.render_widget(p, area);
+        f.render_widget(Paragraph::new(" No track playing").style(Style::default().fg(INACTIVE)), chunks[1]);
+    }
 }
