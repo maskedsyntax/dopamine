@@ -369,4 +369,12 @@ impl App {
         let _ = self.load_tracks();
         self.input_mode = InputMode::Normal;
     }
+
+    pub fn back(&mut self) {
+        match self.view {
+            View::PlaylistDetail => self.set_view(View::Playlists),
+            View::Artists | View::Albums | View::Playlists => self.set_view(View::Home),
+            View::Home => {}
+        }
+    }
 }

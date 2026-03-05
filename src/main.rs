@@ -153,7 +153,8 @@ fn run_app(
                                 app.input_mode = InputMode::CreatePlaylist;
                             }
                             KeyCode::Char('a') => app.start_add_to_playlist(),
-                            KeyCode::Delete | KeyCode::Backspace => {
+                            KeyCode::Backspace => app.back(),
+                            KeyCode::Delete => {
                                 if app.view == app::View::Playlists {
                                     if let Some(idx) = app.list_state.selected() {
                                         if let Some(name) = app.filtered_playlists.get(idx).cloned() {
