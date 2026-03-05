@@ -369,20 +369,16 @@ fn draw_player(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(" No track playing").style(Style::default().fg(INACTIVE)), chunks[2]);
     }
 
-    // 1. Visualizer with micro gaps
+    // 1. Visualizer — one bar per character, no gaps
     let num_bars = app.visualizer_data.len();
     let viz_width = chunks[0].width as usize;
     let mut bars = String::new();
-    let bar_chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    let bar_chars = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
     for i in 0..viz_width {
-        if i % 2 == 0 {
-            let data_idx = (i / 2 * num_bars) / (viz_width / 2 + 1);
-            let val = app.visualizer_data[data_idx.clamp(0, num_bars - 1)];
-            let char_idx = (val * (bar_chars.len() - 1) as f32).round() as usize;
-            bars.push_str(bar_chars[char_idx.clamp(0, bar_chars.len() - 1)]);
-        } else {
-            bars.push(' ');
-        }
+        let data_idx = (i * num_bars) / viz_width.max(1);
+        let val = app.visualizer_data[data_idx.clamp(0, num_bars - 1)];
+        let char_idx = (val * (bar_chars.len() - 1) as f32).round() as usize;
+        bars.push_str(bar_chars[char_idx.clamp(0, bar_chars.len() - 1)]);
     }
     f.render_widget(Paragraph::new(bars).style(Style::default().fg(ACCENT)), chunks[0]);
 

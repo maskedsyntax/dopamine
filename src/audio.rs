@@ -62,7 +62,10 @@ pub struct AudioEngine {
 
 impl AudioEngine {
     pub fn new() -> Result<Self> {
-        let sink_handle = DeviceSinkBuilder::open_default_sink()
+        let sink_handle = DeviceSinkBuilder::from_default_device()
+            .map_err(|_| anyhow::anyhow!("Failed to open default audio stream"))?
+            .with_error_callback(|_| {})
+            .open_sink_or_fallback()
             .map_err(|_| anyhow::anyhow!("Failed to open default audio stream"))?;
         let player = Player::connect_new(&sink_handle.mixer());
         player.set_volume(0.5);

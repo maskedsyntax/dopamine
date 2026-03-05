@@ -392,15 +392,32 @@ impl App {
         self.fft_plan.process(&mut self.fft_buffer);
 
         let num_bars = self.visualizer_data.len();
-        let chunk_size = (self.fft_buffer.len() / 2) / num_bars;
-        
+        let half = self.fft_buffer.len() / 2;
+
+        // Logarithmic frequency mapping: spread bass across fewer bars,
+        // give mids and highs more room so the display isn't dominated by bass.
+        let min_freq: f32 = 1.0;
+        let max_freq = half as f32;
+        let log_min = min_freq.ln();
+        let log_max = max_freq.ln();
+
         for i in 0..num_bars {
-            let sum: f32 = self.fft_buffer[i * chunk_size..(i + 1) * chunk_size]
+            let lo = ((log_min + (log_max - log_min) * i as f32 / num_bars as f32).exp()) as usize;
+            let hi = ((log_min + (log_max - log_min) * (i + 1) as f32 / num_bars as f32).exp()) as usize;
+            let lo = lo.clamp(0, half - 1);
+            let hi = hi.clamp(lo + 1, half);
+
+            let sum: f32 = self.fft_buffer[lo..hi]
                 .iter()
                 .map(|c| (c.re * c.re + c.im * c.im).sqrt())
                 .sum();
-            let val = (sum / chunk_size as f32) * 6.0;
-            self.visualizer_data[i] = (val.clamp(0.0, 1.0) * 0.5) + (self.visualizer_data[i] * 0.5);
+            let avg = sum / (hi - lo) as f32;
+
+            // Frequency-weighted: attenuate bass, boost highs so bars dance evenly
+            let weight = 0.2 + 0.8 * (i as f32 / num_bars as f32);
+            let db = (1.0 + avg * weight).ln() * 0.8;
+            let val = db.clamp(0.0, 1.0);
+            self.visualizer_data[i] = (val * 0.5) + (self.visualizer_data[i] * 0.5);
         }
     }
 
