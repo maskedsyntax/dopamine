@@ -6,7 +6,7 @@ use ratatui::widgets::{TableState, ListState};
 use tui_input::Input;
 use rustfft::{FftPlanner, num_complex::Complex, Fft};
 use std::time::Duration;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::Ordering};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -58,6 +58,7 @@ pub struct App {
     pub marquee_offset: usize,
     pub visualizer_data: Vec<f32>,
     pub fft_plan: Arc<dyn Fft<f32>>,
+    pub fft_buffer: Vec<Complex<f32>>,
 }
 
 impl App {
@@ -94,6 +95,7 @@ impl App {
             marquee_offset: 0,
             visualizer_data: vec![0.0; 20],
             fft_plan,
+            fft_buffer: vec![Complex { re: 0.0, im: 0.0 }; 1024],
         })
     }
 
@@ -175,7 +177,7 @@ impl App {
 
     pub fn set_view(&mut self, view: View) {
         self.view = view;
-        self.search_input = Input::default(); // Clear search on view switch
+        self.search_input = Input::default(); 
         if view != View::PlaylistDetail {
             self.selected_playlist = None;
         }
@@ -377,19 +379,20 @@ impl App {
             return;
         }
 
-        // NON-BLOCKING LOCK: If audio is busy, just skip this frame to prevent stutter
+        // NON-BLOCKING LOCK: UI thread tries to read samples. If audio is busy, just skip.
         if let Ok(samples) = self.audio.samples.try_lock() {
-            let n = 1024;
-            let mut buffer: Vec<Complex<f32>> = samples.iter().take(n).map(|&s| Complex { re: s, im: 0.0 }).collect();
-            drop(samples); // Release immediately
+            for (i, s) in samples.iter().enumerate() {
+                self.fft_buffer[i] = Complex { re: s.load(Ordering::Relaxed) as f32 / 1000000.0, im: 0.0 };
+            }
+            drop(samples); 
 
-            self.fft_plan.process(&mut buffer);
+            self.fft_plan.process(&mut self.fft_buffer);
 
             let num_bars = self.visualizer_data.len();
-            let chunk_size = (n / 2) / num_bars;
+            let chunk_size = (self.fft_buffer.len() / 2) / num_bars;
             
             for i in 0..num_bars {
-                let sum: f32 = buffer[i * chunk_size..(i + 1) * chunk_size]
+                let sum: f32 = self.fft_buffer[i * chunk_size..(i + 1) * chunk_size]
                     .iter()
                     .map(|c| (c.re * c.re + c.im * c.im).sqrt())
                     .sum();

@@ -3,27 +3,24 @@ use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source, Sample,
 use std::fs::File;
 use std::io::BufReader;
 use std::time::Duration;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 pub struct VisualizerSource<I>
 where
     I: Source,
 {
     inner: I,
-    samples: Arc<Mutex<Vec<f32>>>,
-    batch_buffer: Vec<f32>,
+    samples: Arc<Vec<AtomicI32>>,
+    index: Arc<AtomicUsize>,
 }
 
 impl<I> VisualizerSource<I>
 where
     I: Source,
 {
-    pub fn new(inner: I, samples: Arc<Mutex<Vec<f32>>>) -> Self {
-        Self { 
-            inner, 
-            samples,
-            batch_buffer: Vec::with_capacity(512),
-        }
+    pub fn new(inner: I, samples: Arc<Vec<AtomicI32>>, index: Arc<AtomicUsize>) -> Self {
+        Self { inner, samples, index }
     }
 }
 
@@ -36,20 +33,9 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let sample = self.inner.next();
         if let Some(s) = sample {
-            self.batch_buffer.push(s);
-            if self.batch_buffer.len() >= 512 {
-                // NEVER block the audio thread. If we can't get the lock, skip it.
-                if let Ok(mut samples) = self.samples.try_lock() {
-                    // Fast copy of the latest batch
-                    let len = samples.len();
-                    let batch_len = self.batch_buffer.len();
-                    if len >= batch_len {
-                        samples.copy_within(batch_len..len, 0);
-                        samples[len-batch_len..].copy_from_slice(&self.batch_buffer);
-                    }
-                }
-                self.batch_buffer.clear();
-            }
+            // Atomic store: zero locking overhead, zero wait.
+            let idx = self.index.fetch_add(1, Ordering::Relaxed) % self.samples.len();
+            self.samples[idx].store((s * 1000000.0) as i32, Ordering::Relaxed);
         }
         sample
     }
@@ -59,21 +45,10 @@ impl<I> Source for VisualizerSource<I>
 where
     I: Source,
 {
-    fn current_span_len(&self) -> Option<usize> {
-        self.inner.current_span_len()
-    }
-
-    fn channels(&self) -> ChannelCount {
-        self.inner.channels()
-    }
-
-    fn sample_rate(&self) -> SampleRate {
-        self.inner.sample_rate()
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        self.inner.total_duration()
-    }
+    fn current_span_len(&self) -> Option<usize> { self.inner.current_span_len() }
+    fn channels(&self) -> ChannelCount { self.inner.channels() }
+    fn sample_rate(&self) -> SampleRate { self.inner.sample_rate() }
+    fn total_duration(&self) -> Option<Duration> { self.inner.total_duration() }
 }
 
 pub struct AudioEngine {
@@ -81,7 +56,8 @@ pub struct AudioEngine {
     player: Player,
     paused: bool,
     volume: f32,
-    pub samples: Arc<Mutex<Vec<f32>>>,
+    pub samples: Arc<Vec<AtomicI32>>,
+    pub index: Arc<AtomicUsize>,
 }
 
 impl AudioEngine {
@@ -91,12 +67,16 @@ impl AudioEngine {
         let player = Player::connect_new(&sink_handle.mixer());
         player.set_volume(0.5);
 
+        let samples = Arc::new((0..1024).map(|_| AtomicI32::new(0)).collect());
+        let index = Arc::new(AtomicUsize::new(0));
+
         Ok(Self {
             _sink_handle: sink_handle,
             player,
             paused: false,
             volume: 0.5,
-            samples: Arc::new(Mutex::new(vec![0.0; 1024])),
+            samples,
+            index,
         })
     }
 
@@ -104,7 +84,7 @@ impl AudioEngine {
         if let Ok(file) = File::open(path) {
             if let Ok(decoder) = Decoder::try_from(BufReader::new(file)) {
                 self.player.clear();
-                let viz_source = VisualizerSource::new(decoder, Arc::clone(&self.samples));
+                let viz_source = VisualizerSource::new(decoder, Arc::clone(&self.samples), Arc::clone(&self.index));
                 self.player.append(viz_source);
                 self.player.set_volume(self.volume);
                 self.player.play();
@@ -114,14 +94,8 @@ impl AudioEngine {
     }
 
     pub fn toggle(&mut self) {
-        if self.player.empty() {
-            return;
-        }
-        if self.paused {
-            self.player.play();
-        } else {
-            self.player.pause();
-        }
+        if self.player.empty() { return; }
+        if self.paused { self.player.play(); } else { self.player.pause(); }
         self.paused = !self.paused;
     }
 
@@ -130,23 +104,9 @@ impl AudioEngine {
         self.player.set_volume(self.volume);
     }
 
-    pub fn volume(&self) -> f32 {
-        self.volume
-    }
-
-    pub fn is_paused(&self) -> bool {
-        self.paused
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.player.empty()
-    }
-
-    pub fn position(&self) -> Duration {
-        self.player.get_pos()
-    }
-
-    pub fn seek(&mut self, duration: Duration) {
-        let _ = self.player.try_seek(duration);
-    }
+    pub fn volume(&self) -> f32 { self.volume }
+    pub fn is_paused(&self) -> bool { self.paused }
+    pub fn is_empty(&self) -> bool { self.player.empty() }
+    pub fn position(&self) -> Duration { self.player.get_pos() }
+    pub fn seek(&mut self, duration: Duration) { let _ = self.player.try_seek(duration); }
 }
