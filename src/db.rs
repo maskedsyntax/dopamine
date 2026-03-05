@@ -68,11 +68,6 @@ impl Db {
         Ok(())
     }
 
-    pub fn clear_db(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM tracks", [])?;
-        Ok(())
-    }
-
     pub fn cleanup_stale_tracks(&self) -> Result<()> {
         let mut stmt = self.conn.prepare("SELECT path FROM tracks")?;
         let paths: Vec<String> = stmt

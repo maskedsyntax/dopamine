@@ -1,14 +1,75 @@
 use anyhow::Result;
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source, Sample, ChannelCount, SampleRate};
 use std::fs::File;
 use std::io::BufReader;
 use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
+
+pub struct VisualizerSource<I>
+where
+    I: Source,
+{
+    inner: I,
+    samples: Arc<Mutex<VecDeque<f32>>>,
+}
+
+impl<I> VisualizerSource<I>
+where
+    I: Source,
+{
+    pub fn new(inner: I, samples: Arc<Mutex<VecDeque<f32>>>) -> Self {
+        Self { inner, samples }
+    }
+}
+
+impl<I> Iterator for VisualizerSource<I>
+where
+    I: Source,
+{
+    type Item = Sample;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.inner.next();
+        if let Some(s) = sample {
+            if let Ok(mut samples) = self.samples.lock() {
+                samples.push_back(s);
+                if samples.len() > 2048 {
+                    samples.pop_front();
+                }
+            }
+        }
+        sample
+    }
+}
+
+impl<I> Source for VisualizerSource<I>
+where
+    I: Source,
+{
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+
+    fn channels(&self) -> ChannelCount {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> SampleRate {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+}
 
 pub struct AudioEngine {
     _sink_handle: MixerDeviceSink,
     player: Player,
     paused: bool,
     volume: f32,
+    pub samples: Arc<Mutex<VecDeque<f32>>>,
 }
 
 impl AudioEngine {
@@ -23,6 +84,7 @@ impl AudioEngine {
             player,
             paused: false,
             volume: 0.5,
+            samples: Arc::new(Mutex::new(VecDeque::with_capacity(2048))),
         })
     }
 
@@ -30,7 +92,8 @@ impl AudioEngine {
         if let Ok(file) = File::open(path) {
             if let Ok(decoder) = Decoder::try_from(BufReader::new(file)) {
                 self.player.clear();
-                self.player.append(decoder);
+                let viz_source = VisualizerSource::new(decoder, Arc::clone(&self.samples));
+                self.player.append(viz_source);
                 self.player.set_volume(self.volume);
                 self.player.play();
                 self.paused = false;
@@ -69,5 +132,9 @@ impl AudioEngine {
 
     pub fn position(&self) -> Duration {
         self.player.get_pos()
+    }
+
+    pub fn seek(&mut self, duration: Duration) {
+        let _ = self.player.try_seek(duration);
     }
 }

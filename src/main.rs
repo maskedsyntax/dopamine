@@ -194,6 +194,8 @@ fn run_app(
                             KeyCode::Char('4') => app.set_view(app::View::Playlists),
                             KeyCode::Char('n') => app.play_next(),
                             KeyCode::Char('p') => app.play_prev(),
+                            KeyCode::Char('l') => app.seek_forward(),
+                            KeyCode::Char('h') => app.seek_backward(),
                             KeyCode::Char('=') | KeyCode::Char('+') => {
                                 let v = app.audio.volume();
                                 app.audio.set_volume(v + 0.05);

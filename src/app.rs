@@ -4,6 +4,8 @@ use crate::models::Track;
 use anyhow::Result;
 use ratatui::widgets::{TableState, ListState};
 use tui_input::Input;
+use rustfft::{FftPlanner, num_complex::Complex};
+use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -53,6 +55,7 @@ pub struct App {
     pub current_track: Option<Track>,
     pub scanning: bool,
     pub marquee_offset: usize,
+    pub visualizer_data: Vec<f32>,
 }
 
 impl App {
@@ -84,6 +87,7 @@ impl App {
             current_track: None,
             scanning: false,
             marquee_offset: 0,
+            visualizer_data: vec![0.0; 64],
         })
     }
 
@@ -358,10 +362,57 @@ impl App {
             self.play_next();
         }
         self.marquee_offset = self.marquee_offset.wrapping_add(1);
+        self.update_visualizer();
+    }
+
+    pub fn update_visualizer(&mut self) {
+        if self.audio.is_paused() || self.audio.is_empty() {
+            self.visualizer_data.iter_mut().for_each(|v| *v *= 0.9); // Smooth fade out
+            return;
+        }
+
+        let mut samples = Vec::new();
+        if let Ok(buf) = self.audio.samples.lock() {
+            samples = buf.iter().cloned().collect();
+        }
+
+        if samples.len() < 1024 {
+            return;
+        }
+
+        let n = 1024;
+        let mut planner = FftPlanner::new();
+        let fft = planner.plan_fft_forward(n);
+
+        let mut buffer: Vec<Complex<f32>> = samples.iter().take(n).map(|&s| Complex { re: s, im: 0.0 }).collect();
+        fft.process(&mut buffer);
+
+        // Map FFT results to our bars
+        let num_bars = 64;
+        let chunk_size = (n / 2) / num_bars;
+        
+        for i in 0..num_bars {
+            let sum: f32 = buffer[i * chunk_size..(i + 1) * chunk_size]
+                .iter()
+                .map(|c| (c.re * c.re + c.im * c.im).sqrt())
+                .sum();
+            let val = (sum / chunk_size as f32) * 5.0; // Scale factor
+            self.visualizer_data[i] = val.clamp(0.0, 1.0);
+        }
     }
 
     pub fn toggle_playback(&mut self) {
         self.audio.toggle();
+    }
+
+    pub fn seek_forward(&mut self) {
+        let pos = self.audio.position();
+        self.audio.seek(pos + Duration::from_secs(10));
+    }
+
+    pub fn seek_backward(&mut self) {
+        let pos = self.audio.position();
+        self.audio.seek(pos.saturating_sub(Duration::from_secs(10)));
     }
 
     pub fn delete_playlist(&mut self, name: String) {

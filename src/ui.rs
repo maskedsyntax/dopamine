@@ -22,6 +22,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(0),
+            Constraint::Length(2), // Visualizer
             Constraint::Length(3),
         ])
         .split(size);
@@ -54,7 +55,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_confirmation(f, conf);
     }
     
-    draw_player(f, app, chunks[2]);
+    draw_visualizer(f, app, chunks[2]);
+    draw_player(f, app, chunks[3]);
 }
 
 fn draw_search(f: &mut Frame, app: &App, area: Rect) {
@@ -141,6 +143,7 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect) {
     
     sidebar_items.push(Line::from(vec![Span::styled(" ", Style::default())]));
     sidebar_items.push(Line::from(vec![Span::styled("  n/p: Next/Prev track", Style::default().fg(INACTIVE))]));
+    sidebar_items.push(Line::from(vec![Span::styled("  h/l: Seek -/+ 10s", Style::default().fg(INACTIVE))]));
     sidebar_items.push(Line::from(vec![Span::styled("  +/-: Volume", Style::default().fg(INACTIVE))]));
     sidebar_items.push(Line::from(vec![Span::styled("  Ctrl-n: New Playlist", Style::default().fg(INACTIVE))]));
     sidebar_items.push(Line::from(vec![Span::styled("  Del: Delete Playlist", Style::default().fg(INACTIVE))]));
@@ -262,7 +265,7 @@ fn draw_confirmation(f: &mut Frame, conf: &Confirmation) {
 
     let title = match conf {
         Confirmation::Quit => " Quit Dopamine? ",
-        Confirmation::DeletePlaylist(name) => " Delete Playlist? ",
+        Confirmation::DeletePlaylist(_name) => " Delete Playlist? ",
     };
 
     let message = match conf {
@@ -300,6 +303,27 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+fn draw_visualizer(f: &mut Frame, app: &App, area: Rect) {
+    let num_bars = app.visualizer_data.len();
+    let width = area.width as usize;
+    if width == 0 { return; }
+
+    let mut bars = String::new();
+    let bar_chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+    for i in 0..width {
+        let data_idx = (i * num_bars) / width;
+        let val = app.visualizer_data[data_idx];
+        let char_idx = (val * (bar_chars.len() - 1) as f32).round() as usize;
+        bars.push_str(bar_chars[char_idx.clamp(0, bar_chars.len() - 1)]);
+    }
+
+    let p = Paragraph::new(bars)
+        .style(Style::default().fg(ACCENT))
+        .alignment(Alignment::Center);
+    f.render_widget(p, area);
 }
 
 fn draw_player(f: &mut Frame, app: &App, area: Rect) {
