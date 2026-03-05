@@ -39,6 +39,7 @@ pub struct App {
     pub queue_index: usize,
     pub table_state: TableState,
     pub list_state: ListState,
+    pub playlist_select_state: ListState,
     pub search_input: Input,
     pub playlist_input: Input,
     pub input_mode: InputMode,
@@ -68,6 +69,7 @@ impl App {
             queue_index: 0,
             table_state: TableState::default(),
             list_state: ListState::default(),
+            playlist_select_state: ListState::default(),
             search_input: Input::default(),
             playlist_input: Input::default(),
             input_mode: InputMode::Normal,
@@ -166,11 +168,11 @@ impl App {
     pub fn next(&mut self) {
         if let InputMode::SelectPlaylist(_) = &self.input_mode {
             let len = self.playlists.len();
-            let i = match self.list_state.selected() {
+            let i = match self.playlist_select_state.selected() {
                 Some(i) => if i >= len.saturating_sub(1) { 0 } else { i + 1 },
                 None => 0,
             };
-            self.list_state.select(Some(i));
+            self.playlist_select_state.select(Some(i));
             return;
         }
         match self.view {
@@ -212,11 +214,11 @@ impl App {
     pub fn previous(&mut self) {
         if let InputMode::SelectPlaylist(_) = &self.input_mode {
             let len = self.playlists.len();
-            let i = match self.list_state.selected() {
+            let i = match self.playlist_select_state.selected() {
                 Some(i) => if i == 0 { len.saturating_sub(1) } else { i - 1 },
                 None => 0,
             };
-            self.list_state.select(Some(i));
+            self.playlist_select_state.select(Some(i));
             return;
         }
         match self.view {
@@ -306,13 +308,13 @@ impl App {
         if let Some(idx) = self.table_state.selected() {
             if let Some(track) = self.filtered_tracks.get(idx).cloned() {
                 self.input_mode = InputMode::SelectPlaylist(track);
-                self.list_state.select(Some(0));
+                self.playlist_select_state.select(Some(0));
             }
         }
     }
 
     pub fn confirm_add_to_playlist(&mut self, track: Track) {
-        if let Some(idx) = self.list_state.selected() {
+        if let Some(idx) = self.playlist_select_state.selected() {
             if let Some(playlist) = self.playlists.get(idx) {
                 let _ = self.db.add_track_to_playlist(playlist, &track.path);
             }
