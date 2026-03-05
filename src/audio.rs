@@ -11,7 +11,6 @@ where
 {
     inner: I,
     samples: Arc<Mutex<Vec<f32>>>,
-    write_pos: usize,
     batch_buffer: Vec<f32>,
 }
 
@@ -23,8 +22,7 @@ where
         Self { 
             inner, 
             samples,
-            write_pos: 0,
-            batch_buffer: Vec::with_capacity(256),
+            batch_buffer: Vec::with_capacity(512),
         }
     }
 }
@@ -39,14 +37,15 @@ where
         let sample = self.inner.next();
         if let Some(s) = sample {
             self.batch_buffer.push(s);
-            if self.batch_buffer.len() >= 256 {
+            if self.batch_buffer.len() >= 512 {
+                // NEVER block the audio thread. If we can't get the lock, skip it.
                 if let Ok(mut samples) = self.samples.try_lock() {
+                    // Fast copy of the latest batch
                     let len = samples.len();
-                    if len > 0 {
-                        for &val in &self.batch_buffer {
-                            samples[self.write_pos] = val;
-                            self.write_pos = (self.write_pos + 1) % len;
-                        }
+                    let batch_len = self.batch_buffer.len();
+                    if len >= batch_len {
+                        samples.copy_within(batch_len..len, 0);
+                        samples[len-batch_len..].copy_from_slice(&self.batch_buffer);
                     }
                 }
                 self.batch_buffer.clear();

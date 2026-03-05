@@ -377,29 +377,25 @@ impl App {
             return;
         }
 
-        let mut samples = Vec::new();
-        if let Ok(buf) = self.audio.samples.lock() {
-            samples = buf.iter().cloned().collect();
-        }
+        // NON-BLOCKING LOCK: If audio is busy, just skip this frame to prevent stutter
+        if let Ok(samples) = self.audio.samples.try_lock() {
+            let n = 1024;
+            let mut buffer: Vec<Complex<f32>> = samples.iter().take(n).map(|&s| Complex { re: s, im: 0.0 }).collect();
+            drop(samples); // Release immediately
 
-        if samples.len() < 1024 {
-            return;
-        }
+            self.fft_plan.process(&mut buffer);
 
-        let n = 1024;
-        let mut buffer: Vec<Complex<f32>> = samples.iter().take(n).map(|&s| Complex { re: s, im: 0.0 }).collect();
-        self.fft_plan.process(&mut buffer);
-
-        let num_bars = self.visualizer_data.len();
-        let chunk_size = (n / 2) / num_bars;
-        
-        for i in 0..num_bars {
-            let sum: f32 = buffer[i * chunk_size..(i + 1) * chunk_size]
-                .iter()
-                .map(|c| (c.re * c.re + c.im * c.im).sqrt())
-                .sum();
-            let val = (sum / chunk_size as f32) * 6.0;
-            self.visualizer_data[i] = (val.clamp(0.0, 1.0) * 0.5) + (self.visualizer_data[i] * 0.5);
+            let num_bars = self.visualizer_data.len();
+            let chunk_size = (n / 2) / num_bars;
+            
+            for i in 0..num_bars {
+                let sum: f32 = buffer[i * chunk_size..(i + 1) * chunk_size]
+                    .iter()
+                    .map(|c| (c.re * c.re + c.im * c.im).sqrt())
+                    .sum();
+                let val = (sum / chunk_size as f32) * 6.0;
+                self.visualizer_data[i] = (val.clamp(0.0, 1.0) * 0.5) + (self.visualizer_data[i] * 0.5);
+            }
         }
     }
 
