@@ -234,6 +234,9 @@ fn run_app(
                             KeyCode::Char('5') => app.set_view(app::View::Genres),
                             KeyCode::Char('6') => app.set_view(app::View::Years),
                             KeyCode::Char('7') => app.set_view(app::View::Queue),
+                            KeyCode::Char('8') => app.set_view(app::View::Lyrics),
+                            KeyCode::Char('9') => app.set_view(app::View::Equalizer),
+                            KeyCode::Char('0') => app.set_view(app::View::Devices),
                             KeyCode::Char('n') => app.play_next(),
                             KeyCode::Char('p') => app.play_prev(),
                             KeyCode::Char('J') => app.move_queue_down(),
@@ -242,8 +245,6 @@ fn run_app(
                             KeyCode::Char('r') => app.toggle_repeat(),
                             KeyCode::Char('[') => app.decrease_speed(),
                             KeyCode::Char(']') => app.increase_speed(),
-                            KeyCode::Char('l') | KeyCode::Right => app.seek_forward(),
-                            KeyCode::Char('h') | KeyCode::Left => app.seek_backward(),
                             KeyCode::Char('=') | KeyCode::Char('+') => {
                                 let v = app.audio.volume();
                                 app.audio.set_volume(v + 0.05);
@@ -254,9 +255,53 @@ fn run_app(
                                 app.audio.set_volume(v - 0.05);
                                 let _ = app.save_state();
                             }
-                            KeyCode::Up | KeyCode::Char('k') => app.previous(),
-                            KeyCode::Down | KeyCode::Char('j') => app.next(),
-                            KeyCode::Enter => app.play_selected(),
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if app.view == app::View::Equalizer {
+                                    if let Some(idx) = app.list_state.selected() {
+                                        app.adjust_eq(idx, 1.0);
+                                    }
+                                } else {
+                                    app.previous();
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if app.view == app::View::Equalizer {
+                                    if let Some(idx) = app.list_state.selected() {
+                                        app.adjust_eq(idx, -1.0);
+                                    }
+                                } else {
+                                    app.next();
+                                }
+                            }
+                            KeyCode::Left | KeyCode::Char('h') => {
+                                if app.view == app::View::Equalizer {
+                                    let i = match app.list_state.selected() {
+                                        Some(i) => if i == 0 { 9 } else { i - 1 },
+                                        None => 0,
+                                    };
+                                    app.list_state.select(Some(i));
+                                } else {
+                                    app.seek_backward();
+                                }
+                            }
+                            KeyCode::Right | KeyCode::Char('l') => {
+                                if app.view == app::View::Equalizer {
+                                    let i = match app.list_state.selected() {
+                                        Some(i) => if i >= 9 { 0 } else { i + 1 },
+                                        None => 0,
+                                    };
+                                    app.list_state.select(Some(i));
+                                } else {
+                                    app.seek_forward();
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if app.view == app::View::Equalizer {
+                                    app.toggle_equalizer();
+                                } else {
+                                    app.play_selected();
+                                }
+                            }
                             KeyCode::Char(' ') => app.toggle_playback(),
                             _ => {}
                         }

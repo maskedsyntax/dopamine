@@ -1,7 +1,7 @@
 use crate::app::{App, Confirmation, InputMode, View};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect, Alignment},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Row, Table, Paragraph, BorderType, List, ListItem, ListState, Clear},
     Frame,
@@ -41,6 +41,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(chunks[1]);
 
     draw_sidebar(f, app, main_chunks[0], fg, accent, inactive, secondary);
+    draw_album_art(f, app, main_chunks[0], accent);
     
     match app.view {
         View::Home => draw_table(f, app, main_chunks[1], fg, primary, secondary, inactive),
@@ -54,6 +55,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         View::Playlists => draw_list(f, &app.filtered_playlists, &mut app.list_state, main_chunks[1], " Playlists ", fg, accent, inactive),
         View::PlaylistDetail => draw_table(f, app, main_chunks[1], fg, primary, secondary, inactive),
         View::Queue => draw_queue(f, app, main_chunks[1], fg, primary, secondary, inactive),
+        View::Lyrics => draw_lyrics(f, app, main_chunks[1], fg, accent, inactive),
+        View::Equalizer => draw_equalizer(f, app, main_chunks[1], fg, accent, inactive),
+        View::Devices => draw_devices(f, app, main_chunks[1], fg, accent, inactive),
         View::MetadataEditor => {} 
     }
     
@@ -155,6 +159,8 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, 
     let years_highlight = app.view == View::Years;
     let playlists_highlight = app.view == View::Playlists || app.view == View::PlaylistDetail;
     let queue_highlight = app.view == View::Queue;
+    let lyrics_highlight = app.view == View::Lyrics;
+    let equalizer_highlight = app.view == View::Equalizer;
 
     let mut sidebar_items = vec![
         Line::from(vec![Span::styled(if home_highlight { "❯ Home" } else { "  Home" }, if home_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
@@ -164,6 +170,8 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, 
         Line::from(vec![Span::styled(if years_highlight { "❯ Years" } else { "  Years" }, if years_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
         Line::from(vec![Span::styled(if playlists_highlight { "❯ Playlists" } else { "  Playlists" }, if playlists_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
         Line::from(vec![Span::styled(if queue_highlight { "❯ Queue" } else { "  Queue" }, if queue_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
+        Line::from(vec![Span::styled(if lyrics_highlight { "❯ Lyrics" } else { "  Lyrics" }, if lyrics_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
+        Line::from(vec![Span::styled(if equalizer_highlight { "❯ Equalizer" } else { "  Equalizer" }, if equalizer_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
         Line::from(vec![Span::styled(" ", Style::default())]),
     ];
 
@@ -186,8 +194,60 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, 
     sidebar_items.push(Line::from(vec![Span::styled("  Del: Delete Playlist", Style::default().fg(inactive))]));
     sidebar_items.push(Line::from(vec![Span::styled("  q: Quit", Style::default().fg(inactive))]));
 
+    // Space for album art
+    for _ in 0..12 {
+        sidebar_items.push(Line::from(vec![Span::raw(" ")]));
+    }
+
     let p = Paragraph::new(sidebar_items).block(block);
     f.render_widget(p, area);
+}
+
+fn draw_album_art(f: &mut Frame, app: &App, area: Rect, _accent: Color) {
+    let track = match &app.current_track {
+        Some(t) => t,
+        None => return,
+    };
+
+    let art_data = match &track.album_art {
+        Some(art) => art,
+        None => return,
+    };
+
+    use base64::prelude::*;
+    let bytes = match BASE64_STANDARD.decode(art_data) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+
+    if let Ok(img) = image::load_from_memory(&bytes) {
+        let img = img.to_rgb8();
+        
+        // We use half-blocks to render the image
+        // ▀ - top half, ▄ - bottom half, █ - full block
+        // Each character represents two vertical pixels.
+        
+        let target_w = (area.width.saturating_sub(4)) as u32;
+        let target_h = 10; // Fixed height for art
+        let img = image::imageops::thumbnail(&img, target_w, target_h * 2);
+        
+        let start_y = area.y + area.height.saturating_sub(target_h as u16 + 2);
+        let start_x = area.x + 2;
+
+        for y in 0..target_h {
+            let mut spans = Vec::new();
+            for x in 0..target_w {
+                if x >= img.width() || (y * 2 + 1) >= img.height() { break; }
+                let top = img.get_pixel(x, y * 2);
+                let bottom = img.get_pixel(x, y * 2 + 1);
+                
+                spans.push(Span::styled("▀", Style::default()
+                    .fg(Color::Rgb(top[0], top[1], top[2]))
+                    .bg(Color::Rgb(bottom[0], bottom[1], bottom[2]))));
+            }
+            f.render_widget(Paragraph::new(Line::from(spans)), Rect::new(start_x, start_y + y as u16, target_w as u16, 1));
+        }
+    }
 }
 
 fn draw_table(f: &mut Frame, app: &mut App, area: Rect, fg: Color, primary: Color, secondary: Color, inactive: Color) {
@@ -291,6 +351,148 @@ fn draw_queue(f: &mut Frame, app: &mut App, area: Rect, fg: Color, primary: Colo
     .highlight_symbol("❯ ");
 
     f.render_stateful_widget(t, area, &mut app.table_state);
+}
+
+fn draw_lyrics(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, inactive: Color) {
+    let track = match &app.current_track {
+        Some(t) => t,
+        None => {
+            f.render_widget(Paragraph::new("No track playing").alignment(Alignment::Center), area);
+            return;
+        }
+    };
+
+    let lyrics_raw = match &track.lyrics {
+        Some(l) => l,
+        None => {
+            f.render_widget(Paragraph::new("No lyrics found (.lrc file missing)").alignment(Alignment::Center), area);
+            return;
+        }
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(inactive))
+        .title(format!(" Lyrics: {} ", track.title));
+
+    let mut lines = Vec::new();
+    for line in lyrics_raw.lines() {
+        if line.starts_with('[') {
+            let parts: Vec<&str> = line.splitn(2, ']').collect();
+            if parts.len() == 2 {
+                let time_str = parts[0].trim_start_matches('[');
+                let text = parts[1].trim();
+                
+                let time_parts: Vec<&str> = time_str.split(':').collect();
+                if time_parts.len() == 2 {
+                    let mins: u64 = time_parts[0].parse().unwrap_or(0);
+                    let secs: f64 = time_parts[1].parse().unwrap_or(0.0);
+                    let total_ms = (mins * 60 * 1000) + (secs * 1000.0) as u64;
+                    lines.push((total_ms, text));
+                }
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        f.render_widget(Paragraph::new("No synchronized lyrics found in LRC file").alignment(Alignment::Center).block(block), area);
+        return;
+    }
+
+    let current_ms = app.audio.position().as_millis() as u64;
+    let active_idx = lines.iter().position(|(ms, _)| *ms > current_ms).unwrap_or(lines.len()).saturating_sub(1);
+
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let center_y = inner_height / 2;
+    
+    let mut spans = Vec::new();
+    for (i, (_, text)) in lines.iter().enumerate() {
+        let style = if i == active_idx {
+            Style::default().fg(accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(fg)
+        };
+        spans.push(Line::from(vec![Span::styled(text.to_string(), style)]));
+    }
+
+    let scroll = active_idx.saturating_sub(center_y);
+    let p = Paragraph::new(spans)
+        .block(block)
+        .alignment(Alignment::Center)
+        .scroll((scroll as u16, 0));
+
+    f.render_widget(p, area);
+}
+
+fn draw_equalizer(f: &mut Frame, app: &mut App, area: Rect, fg: Color, accent: Color, inactive: Color) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(inactive))
+        .title(format!(" Equalizer ({}) ", if app.audio.eq_enabled { "ON" } else { "OFF" }));
+
+    f.render_widget(block, area);
+
+    let inner = area.inner(ratatui::layout::Margin { vertical: 2, horizontal: 2 });
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(10); 10])
+        .split(inner);
+
+    let labels = ["60Hz", "170Hz", "310Hz", "600Hz", "1kHz", "3kHz", "6kHz", "12kHz", "14kHz", "16kHz"];
+    let selected_idx = app.list_state.selected().unwrap_or(0);
+
+    for i in 0..10 {
+        let val = app.audio.eq_bands[i];
+        let normalized = (val + 10.0) / 20.0;
+        
+        let bar_height = (inner.height.saturating_sub(4)) as f32;
+        let filled_height = (normalized * bar_height) as u16;
+        
+        let style = if i == selected_idx {
+            Style::default().fg(accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(fg)
+        };
+
+        let mut bar_text = Vec::new();
+        for y in 0..bar_height as u16 {
+            if y < (bar_height as u16 - filled_height) {
+                bar_text.push(Line::from(vec![Span::raw("  ░  ")]));
+            } else {
+                bar_text.push(Line::from(vec![Span::styled("  █  ", style)]));
+            }
+        }
+        
+        let p = Paragraph::new(bar_text).alignment(Alignment::Center);
+        f.render_widget(p, chunks[i]);
+        
+        let label_rect = Rect::new(chunks[i].x, inner.y + inner.height - 2, chunks[i].width, 1);
+        let val_rect = Rect::new(chunks[i].x, inner.y + inner.height - 1, chunks[i].width, 1);
+        
+        f.render_widget(Paragraph::new(labels[i]).style(style).alignment(Alignment::Center), label_rect);
+        f.render_widget(Paragraph::new(format!("{:.0}dB", val)).style(style).alignment(Alignment::Center), val_rect);
+    }
+
+    let instr_rect = Rect::new(area.x, area.y + area.height - 2, area.width, 1);
+    let instructions = Paragraph::new("h/l: Select Band | j/k: Adjust | Enter: Toggle EQ | Backspace: Back")
+        .style(Style::default().fg(inactive))
+        .alignment(Alignment::Center);
+    f.render_widget(instructions, instr_rect);
+}
+
+fn draw_devices(f: &mut Frame, app: &mut App, area: Rect, fg: Color, accent: Color, inactive: Color) {
+    let items: Vec<ListItem> = app.audio_devices.iter().map(|d| {
+        ListItem::new(d.as_str()).style(Style::default().fg(fg))
+    }).collect();
+
+    let l = List::new(items)
+        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(inactive)).title(" Output Devices (Selection coming soon) "))
+        .highlight_style(Style::default().bg(Color::Rgb(49, 50, 68)).fg(accent).add_modifier(Modifier::BOLD))
+        .highlight_symbol("❯ ");
+
+    f.render_stateful_widget(l, area, &mut app.list_state);
 }
 
 fn draw_select_playlist(f: &mut Frame, app: &mut App, fg: Color, bg: Color, accent: Color) {
@@ -412,7 +614,7 @@ fn draw_help(f: &mut Frame, fg: Color, bg: Color, accent: Color, primary: Color)
 
     let help_text = vec![
         Line::from(vec![Span::styled("Navigation", Style::default().fg(primary).bold())]),
-        Line::from(vec![Span::raw("  1-7: Switch Views (Home, Artist, Album, Genre, Year, Playlists, Queue)")]),
+        Line::from(vec![Span::raw("  1-9, 0: Views (Home, Art, Alb, Gen, Year, Pl, Q, Ly, EQ, Dev)")]),
         Line::from(vec![Span::raw("  j/k: Navigate list | Enter: Play/Select")]),
         Line::from(vec![Span::raw("  Backspace: Back | /: Search")]),
         Line::from(vec![Span::raw(" ")]),
@@ -483,7 +685,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn draw_player(f: &mut Frame, app: &App, area: Rect, fg: Color, primary: Color, accent: Color, secondary: Color, inactive: Color) {
+fn draw_player(f: &mut Frame, app: &App, area: Rect, fg: Color, primary: Color, accent: Color, _secondary: Color, inactive: Color) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)

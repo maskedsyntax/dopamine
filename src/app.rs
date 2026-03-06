@@ -21,6 +21,9 @@ pub enum View {
     Playlists,
     PlaylistDetail,
     Queue,
+    Lyrics,
+    Equalizer,
+    Devices,
     MetadataEditor,
 }
 
@@ -91,6 +94,8 @@ pub struct App {
     pub marquee_offset: usize,
     pub notifications: Vec<(String, Instant)>,
     pub sleep_timer: Option<(Instant, Duration)>, // (start_time, total_duration)
+    pub preloaded_path: Option<String>,
+    pub audio_devices: Vec<String>,
     pub visualizer_data: Vec<f32>,
     pub fft_plan: Arc<dyn Fft<f32>>,
     pub fft_buffer: Vec<Complex<f32>>,
@@ -142,6 +147,8 @@ impl App {
             marquee_offset: 0,
             notifications: Vec::new(),
             sleep_timer: None,
+            preloaded_path: None,
+            audio_devices: AudioEngine::list_devices(),
             visualizer_data: vec![0.0; 20],
             fft_plan,
             fft_buffer: vec![Complex { re: 0.0, im: 0.0 }; 1024],
@@ -164,7 +171,10 @@ impl App {
     }
 
     pub fn apply_search(&mut self) {
-        let query = self.search_input.value().to_lowercase();
+        let query = self.search_input.value();
+        use fuzzy_matcher::FuzzyMatcher;
+        use fuzzy_matcher::skim::SkimMatcherV2;
+        let matcher = SkimMatcherV2::default();
         
         match self.view {
             View::Home | View::PlaylistDetail => {
@@ -186,65 +196,69 @@ impl App {
                 if query.is_empty() {
                     self.filtered_tracks = base_tracks;
                 } else {
-                    self.filtered_tracks = base_tracks
-                        .into_iter()
-                        .filter(|t| t.title.to_lowercase().contains(&query) || t.artist.to_lowercase().contains(&query))
+                    let mut scored: Vec<(i64, Track)> = base_tracks.into_iter()
+                        .filter_map(|t| {
+                            let text = format!("{} {} {}", t.title, t.artist, t.album);
+                            matcher.fuzzy_match(&text, query).map(|score| (score, t))
+                        })
                         .collect();
+                    scored.sort_by(|a, b| b.0.cmp(&a.0));
+                    self.filtered_tracks = scored.into_iter().map(|(_, t)| t).collect();
                 }
             }
             View::Artists => {
                 if query.is_empty() {
                     self.filtered_artists = self.artists.clone();
                 } else {
-                    self.filtered_artists = self.artists
-                        .iter()
-                        .filter(|a| a.to_lowercase().contains(&query))
-                        .cloned()
+                    let mut scored: Vec<(i64, String)> = self.artists.iter()
+                        .filter_map(|a| matcher.fuzzy_match(a, query).map(|score| (score, a.clone())))
                         .collect();
+                    scored.sort_by(|a, b| b.0.cmp(&a.0));
+                    self.filtered_artists = scored.into_iter().map(|(_, a)| a).collect();
                 }
             }
             View::Albums => {
                 if query.is_empty() {
                     self.filtered_albums = self.albums.clone();
                 } else {
-                    self.filtered_albums = self.albums
-                        .iter()
-                        .filter(|a| a.to_lowercase().contains(&query))
-                        .cloned()
+                    let mut scored: Vec<(i64, String)> = self.albums.iter()
+                        .filter_map(|a| matcher.fuzzy_match(a, query).map(|score| (score, a.clone())))
                         .collect();
+                    scored.sort_by(|a, b| b.0.cmp(&a.0));
+                    self.filtered_albums = scored.into_iter().map(|(_, a)| a).collect();
                 }
             }
             View::Genres => {
                 if query.is_empty() {
                     self.filtered_genres = self.genres.clone();
                 } else {
-                    self.filtered_genres = self.genres
-                        .iter()
-                        .filter(|g| g.to_lowercase().contains(&query))
-                        .cloned()
+                    let mut scored: Vec<(i64, String)> = self.genres.iter()
+                        .filter_map(|g| matcher.fuzzy_match(g, query).map(|score| (score, g.clone())))
                         .collect();
+                    scored.sort_by(|a, b| b.0.cmp(&a.0));
+                    self.filtered_genres = scored.into_iter().map(|(_, g)| g).collect();
                 }
             }
             View::Years => {
                 if query.is_empty() {
                     self.filtered_years = self.years.clone();
                 } else {
-                    self.filtered_years = self.years
-                        .iter()
-                        .filter(|y| y.to_string().contains(&query))
-                        .cloned()
+                    let mut scored: Vec<(i64, i32)> = self.years.iter()
+                        .filter_map(|y| matcher.fuzzy_match(&y.to_string(), query).map(|score| (score, *y)))
                         .collect();
+                    scored.sort_by(|a, b| b.0.cmp(&a.0));
+                    self.filtered_years = scored.into_iter().map(|(_, y)| y).collect();
                 }
             }
             View::Playlists => {
                 if query.is_empty() {
                     self.filtered_playlists = self.playlists.clone();
                 } else {
-                    self.filtered_playlists = self.playlists
-                        .iter()
-                        .filter(|p| p.to_lowercase().contains(&query))
-                        .cloned()
+                    let mut scored: Vec<(i64, String)> = self.playlists.iter()
+                        .filter_map(|p| matcher.fuzzy_match(p, query).map(|score| (score, p.clone())))
                         .collect();
+                    scored.sort_by(|a, b| b.0.cmp(&a.0));
+                    self.filtered_playlists = scored.into_iter().map(|(_, p)| p).collect();
                 }
             }
             _ => {}
@@ -421,6 +435,7 @@ impl App {
                         self.queue_index = idx;
                         self.current_track = Some(track.clone());
                         self.audio.play(&track.path);
+                        self.preloaded_path = None;
                         let _ = self.db.record_play(&track.path);
                         self.update_shuffled_indices();
                         if self.shuffle {
@@ -740,6 +755,7 @@ impl App {
         if let Some(track) = self.queue.get(self.queue_index).cloned() {
             self.current_track = Some(track.clone());
             self.audio.play(&track.path);
+            self.preloaded_path = None;
             let _ = self.db.record_play(&track.path);
         }
         let _ = self.save_state();
@@ -774,15 +790,68 @@ impl App {
         if let Some(track) = self.queue.get(self.queue_index).cloned() {
             self.current_track = Some(track.clone());
             self.audio.play(&track.path);
+            self.preloaded_path = None;
             let _ = self.db.record_play(&track.path);
         }
         let _ = self.save_state();
     }
 
     pub fn tick(&mut self) {
-        if self.current_track.is_some() && !self.audio.is_paused() && self.audio.is_empty() {
-            self.play_next();
+        if let Some(track) = &self.current_track {
+            if !self.audio.is_paused() {
+                if self.audio.is_empty() {
+                    // Current track finished, check if we have a preloaded track
+                    if let Some(next_path) = self.preloaded_path.take() {
+                        // Find the track in queue to update current_track info
+                        if let Some(next_track) = self.queue.iter().find(|t| t.path == next_path).cloned() {
+                            self.current_track = Some(next_track);
+                            // We need to update queue_index too
+                            if let Some(idx) = self.queue.iter().position(|t| t.path == next_path) {
+                                self.queue_index = idx;
+                            }
+                        }
+                        self.audio.swap_players(next_path);
+                        let _ = self.save_state();
+                    } else {
+                        self.play_next();
+                    }
+                } else {
+                    // Check if we should preload next track
+                    let pos = self.audio.position().as_secs();
+                    let total = track.duration_secs.max(0) as u64;
+                    if total > 0 && total.saturating_sub(pos) <= 5 && self.preloaded_path.is_none() {
+                        // Preload next track
+                        let next_idx = if self.shuffle {
+                            let current_shuffle_pos = self.shuffled_indices.iter().position(|&i| i == self.queue_index).unwrap_or(0);
+                            if current_shuffle_pos < self.shuffled_indices.len() - 1 {
+                                Some(self.shuffled_indices[current_shuffle_pos + 1])
+                            } else if self.repeat_mode == RepeatMode::All {
+                                Some(self.shuffled_indices[0])
+                            } else {
+                                None
+                            }
+                        } else {
+                            if self.queue_index < self.queue.len() - 1 {
+                                Some(self.queue_index + 1)
+                            } else if self.repeat_mode == RepeatMode::All {
+                                Some(0)
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let Some(idx) = next_idx {
+                            if let Some(next_track) = self.queue.get(idx) {
+                                let path = next_track.path.clone();
+                                self.audio.preload(&path);
+                                self.preloaded_path = Some(path);
+                            }
+                        }
+                    }
+                }
+            }
         }
+        
         self.marquee_offset = self.marquee_offset.wrapping_add(1);
         self.update_visualizer();
         
@@ -926,10 +995,34 @@ impl App {
         self.notifications.push((message, Instant::now()));
     }
 
+    pub fn toggle_equalizer(&mut self) {
+        self.audio.eq_enabled = !self.audio.eq_enabled;
+        if let Some(track) = self.current_track.clone() {
+            // Re-play current track to apply/remove filters
+            let pos = self.audio.position();
+            self.audio.play(&track.path);
+            let _ = self.audio.seek(pos);
+        }
+        self.notify(format!("Equalizer: {}", if self.audio.eq_enabled { "ON" } else { "OFF" }));
+    }
+
+    pub fn adjust_eq(&mut self, band: usize, amount: f32) {
+        if band < 10 {
+            self.audio.eq_bands[band] = (self.audio.eq_bands[band] + amount).clamp(-10.0, 10.0);
+            if self.audio.eq_enabled {
+                if let Some(track) = self.current_track.clone() {
+                    let pos = self.audio.position();
+                    self.audio.play(&track.path);
+                    let _ = self.audio.seek(pos);
+                }
+            }
+        }
+    }
+
     pub fn back(&mut self) {
         match self.view {
             View::PlaylistDetail => self.set_view(View::Playlists),
-            View::Artists | View::Albums | View::Playlists => self.set_view(View::Home),
+            View::Artists | View::Albums | View::Playlists | View::Genres | View::Years | View::Queue | View::Lyrics | View::Equalizer | View::Devices => self.set_view(View::Home),
             _ => {}
         }
     }

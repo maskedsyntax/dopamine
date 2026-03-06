@@ -54,83 +54,161 @@ where
     }
 }
 
+use cpal::traits::{DeviceTrait, HostTrait};
+
 pub struct AudioEngine {
     _sink_handle: MixerDeviceSink,
-    player: Player,
+    players: [Player; 2],
+    active_idx: usize,
     paused: bool,
     volume: f32,
     playback_speed: f32,
     current_path: Option<String>,
     seek_offset: Duration,
+    pub eq_bands: [f32; 10], // Gain in dB (-10 to +10)
+    pub eq_enabled: bool,
     pub samples: Arc<Vec<AtomicI32>>,
     pub index: Arc<AtomicUsize>,
 }
 
 impl AudioEngine {
+    pub fn list_devices() -> Vec<String> {
+        let host = cpal::default_host();
+        host.output_devices()
+            .map(|devices| {
+                devices
+                    .map(|d| d.name().unwrap_or_else(|_| "Unknown Device".to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
     pub fn new() -> Result<Self> {
         let sink_handle = DeviceSinkBuilder::from_default_device()
             .map_err(|_| anyhow::anyhow!("Failed to open default audio stream"))?
             .with_error_callback(|_| {})
             .open_sink_or_fallback()
             .map_err(|_| anyhow::anyhow!("Failed to open default audio stream"))?;
-        let player = Player::connect_new(&sink_handle.mixer());
-        player.set_volume(0.5);
+        
+        let p1 = Player::connect_new(&sink_handle.mixer());
+        let p2 = Player::connect_new(&sink_handle.mixer());
+        p1.set_volume(0.5);
+        p2.set_volume(0.0);
 
         let samples = Arc::new((0..1024).map(|_| AtomicI32::new(0)).collect());
         let index = Arc::new(AtomicUsize::new(0));
 
         Ok(Self {
             _sink_handle: sink_handle,
-            player,
+            players: [p1, p2],
+            active_idx: 0,
             paused: false,
             volume: 0.5,
             playback_speed: 1.0,
             current_path: None,
             seek_offset: Duration::default(),
+            eq_bands: [0.0; 10],
+            eq_enabled: false,
             samples,
             index,
         })
     }
 
+    fn active(&self) -> &Player { &self.players[self.active_idx] }
+    fn inactive(&self) -> &Player { &self.players[1 - self.active_idx] }
+
     pub fn play(&mut self, path: &str) {
         self.current_path = Some(path.to_string());
-        self.seek_offset = Duration::default(); // Reset offset on new track
+        self.seek_offset = Duration::default();
         if let Ok(file) = File::open(path) {
             if let Ok(decoder) = Decoder::try_from(BufReader::new(file)) {
-                self.player.clear();
+                self.players[self.active_idx].clear();
                 let viz_source = VisualizerSource::new(decoder, Arc::clone(&self.samples), Arc::clone(&self.index));
-                self.player.append(viz_source);
-                self.player.set_volume(self.volume);
-                self.player.set_speed(self.playback_speed);
-                self.player.play();
+                
+                let mut source: Box<dyn Source<Item = Sample> + Send> = Box::new(viz_source);
+                if self.eq_enabled {
+                    if self.eq_bands[0] < -2.0 { source = Box::new(source.high_pass(80)); }
+                    if self.eq_bands[9] < -2.0 { source = Box::new(source.low_pass(12000)); }
+                }
+
+                self.players[self.active_idx].append(source);
+                self.players[self.active_idx].set_volume(self.volume);
+                self.players[self.active_idx].set_speed(self.playback_speed);
+                self.players[self.active_idx].play();
                 self.paused = false;
+                
+                self.players[1 - self.active_idx].clear();
             }
         }
     }
 
+    pub fn preload(&mut self, path: &str) {
+        if let Ok(file) = File::open(path) {
+            if let Ok(decoder) = Decoder::try_from(BufReader::new(file)) {
+                let inactive_idx = 1 - self.active_idx;
+                self.players[inactive_idx].clear();
+                // Note: Preloaded tracks don't get the visualizer wrapper until they are active
+                // because we only have one set of visualizer samples/index atomics.
+                // We'll wrap it during the swap.
+                self.players[inactive_idx].append(decoder);
+                self.players[inactive_idx].set_volume(0.0);
+                self.players[inactive_idx].set_speed(self.playback_speed);
+                // We don't call .play() yet, or we call it and keep volume at 0.
+                // Rodio players usually need .play() to be ready.
+                self.players[inactive_idx].play();
+            }
+        }
+    }
+
+    pub fn swap_players(&mut self, next_path: String) {
+        let old_idx = self.active_idx;
+        let new_idx = 1 - self.active_idx;
+        
+        self.active_idx = new_idx;
+        self.current_path = Some(next_path);
+        self.seek_offset = Duration::default();
+        
+        self.players[new_idx].set_volume(self.volume);
+        self.players[old_idx].set_volume(0.0);
+        self.players[old_idx].clear();
+        
+        // Note: To get the visualizer working on the new track immediately,
+        // we'd ideally re-wrap the preloaded decoder. 
+        // But since it's already appended to the Player, we might just have to 
+        // accept a tiny gap or skip visualizer for preloaded tracks until 
+        // they are "played" normally.
+        // For true gapless with visualizer, we need a better architecture.
+        // Let's just re-play for now to keep visualizer consistent.
+        if let Some(p) = &self.current_path {
+            let path = p.clone();
+            self.play(&path);
+        }
+    }
+
     pub fn toggle(&mut self) {
-        if self.player.empty() { return; }
-        if self.paused { self.player.play(); } else { self.player.pause(); }
+        let p = &self.players[self.active_idx];
+        if p.empty() { return; }
+        if self.paused { p.play(); } else { p.pause(); }
         self.paused = !self.paused;
     }
 
     pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume.clamp(0.0, 1.0);
-        self.player.set_volume(self.volume);
+        self.players[self.active_idx].set_volume(self.volume);
     }
 
     pub fn set_speed(&mut self, speed: f32) {
         self.playback_speed = speed.clamp(0.5, 2.0);
-        self.player.set_speed(self.playback_speed);
+        self.players[0].set_speed(self.playback_speed);
+        self.players[1].set_speed(self.playback_speed);
     }
 
     pub fn volume(&self) -> f32 { self.volume }
     pub fn playback_speed(&self) -> f32 { self.playback_speed }
     pub fn is_paused(&self) -> bool { self.paused }
-    pub fn is_empty(&self) -> bool { self.player.empty() }
+    pub fn is_empty(&self) -> bool { self.players[self.active_idx].empty() }
     
     pub fn position(&self) -> Duration { 
-        self.seek_offset + self.player.get_pos() 
+        self.seek_offset + self.players[self.active_idx].get_pos() 
     }
     
     pub fn seek(&mut self, duration: Duration) -> Result<()> {
@@ -139,25 +217,34 @@ impl AudioEngine {
             None => return Err(anyhow::anyhow!("No track playing")),
         };
 
-        // Re-open the file and seek the decoder directly.
-        // This guarantees backward seeking works for all formats and correctly updates playback state.
         if let Ok(file) = File::open(&path) {
             if let Ok(mut decoder) = Decoder::try_from(BufReader::new(file)) {
-                // Seek the decoder itself before wrapping it
                 let _ = decoder.try_seek(duration);
-                self.seek_offset = duration; // Save the true playback position
+                self.seek_offset = duration;
                 
-                self.player.clear();
+                self.players[self.active_idx].clear();
                 let viz_source = VisualizerSource::new(decoder, Arc::clone(&self.samples), Arc::clone(&self.index));
-                self.player.append(viz_source);
-                self.player.set_volume(self.volume);
-                self.player.set_speed(self.playback_speed);
-                self.player.play();
+                
+                let mut source: Box<dyn Source<Item = Sample> + Send> = Box::new(viz_source);
+                if self.eq_enabled {
+                    if self.eq_bands[0] < -2.0 { source = Box::new(source.high_pass(80)); }
+                    if self.eq_bands[9] < -2.0 { source = Box::new(source.low_pass(12000)); }
+                }
+
+                self.players[self.active_idx].append(source);
+                self.players[self.active_idx].set_volume(self.volume);
+                self.players[self.active_idx].set_speed(self.playback_speed);
+                self.players[self.active_idx].play();
                 self.paused = false;
                 return Ok(());
             }
         }
         
-        Err(anyhow::anyhow!("Seek failed to re-open file"))
+        Err(anyhow::anyhow!("Seek failed"))
+    }
+
+    pub fn stop(&mut self) {
+        self.players[0].clear();
+        self.players[1].clear();
     }
 }
