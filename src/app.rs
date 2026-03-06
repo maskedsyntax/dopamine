@@ -1,3 +1,5 @@
+use crate::config::Config;
+
 use crate::audio::AudioEngine;
 use crate::db::Db;
 use crate::models::Track;
@@ -5,22 +7,40 @@ use anyhow::Result;
 use ratatui::widgets::{TableState, ListState};
 use tui_input::Input;
 use rustfft::{FftPlanner, num_complex::Complex, Fft};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::sync::{Arc, atomic::Ordering};
+use rand::seq::SliceRandom;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Home,
     Artists,
     Albums,
+    Genres,
+    Years,
     Playlists,
     PlaylistDetail,
+    Queue,
+    MetadataEditor,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RepeatMode {
+    None,
+    One,
+    All,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Confirmation {
     Quit,
     DeletePlaylist(String),
+}
+
+pub enum EditField {
+    Title,
+    Artist,
+    Album,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -30,32 +50,47 @@ pub enum InputMode {
     CreatePlaylist,
     SelectPlaylist(Track),
     Confirm(Confirmation),
+    EditMetadata(Track, usize), // track, field_index
+    Help,
 }
 
 pub struct App {
     pub db: Db,
     pub audio: AudioEngine,
+    pub config: Config,
     pub view: View,
     pub tracks: Vec<Track>,
     pub artists: Vec<String>,
     pub albums: Vec<String>,
+    pub genres: Vec<String>,
+    pub years: Vec<i32>,
     pub playlists: Vec<String>,
     pub filtered_tracks: Vec<Track>,
     pub filtered_artists: Vec<String>,
     pub filtered_albums: Vec<String>,
+    pub filtered_genres: Vec<String>,
+    pub filtered_years: Vec<i32>,
     pub filtered_playlists: Vec<String>,
     pub selected_playlist: Option<String>,
     pub queue: Vec<Track>,
     pub queue_index: usize,
+    pub shuffle: bool,
+    pub repeat_mode: RepeatMode,
+    pub shuffled_indices: Vec<usize>,
+    pub shuffle_ptr: usize,
     pub table_state: TableState,
     pub list_state: ListState,
     pub playlist_select_state: ListState,
     pub search_input: Input,
     pub playlist_input: Input,
+    pub edit_inputs: Vec<Input>,
     pub input_mode: InputMode,
     pub current_track: Option<Track>,
     pub scanning: bool,
+    pub scan_progress: (usize, usize),
     pub marquee_offset: usize,
+    pub notifications: Vec<(String, Instant)>,
+    pub sleep_timer: Option<(Instant, Duration)>, // (start_time, total_duration)
     pub visualizer_data: Vec<f32>,
     pub fft_plan: Arc<dyn Fft<f32>>,
     pub fft_buffer: Vec<Complex<f32>>,
@@ -66,33 +101,47 @@ impl App {
         let db = Db::new(db_path)?;
         db.init()?;
         let audio = AudioEngine::new()?;
+        let config = Config::load();
         let mut planner = FftPlanner::new();
         let fft_plan = planner.plan_fft_forward(1024);
         
         Ok(Self {
             db,
             audio,
+            config,
             view: View::Home,
             tracks: Vec::new(),
             artists: Vec::new(),
             albums: Vec::new(),
+            genres: Vec::new(),
+            years: Vec::new(),
             playlists: Vec::new(),
             filtered_tracks: Vec::new(),
             filtered_artists: Vec::new(),
             filtered_albums: Vec::new(),
+            filtered_genres: Vec::new(),
+            filtered_years: Vec::new(),
             filtered_playlists: Vec::new(),
             selected_playlist: None,
             queue: Vec::new(),
             queue_index: 0,
+            shuffle: false,
+            repeat_mode: RepeatMode::None,
+            shuffled_indices: Vec::new(),
+            shuffle_ptr: 0,
             table_state: TableState::default(),
             list_state: ListState::default(),
             playlist_select_state: ListState::default(),
             search_input: Input::default(),
             playlist_input: Input::default(),
+            edit_inputs: vec![Input::default(), Input::default(), Input::default(), Input::default(), Input::default()],
             input_mode: InputMode::Normal,
             current_track: None,
             scanning: false,
+            scan_progress: (0, 0),
             marquee_offset: 0,
+            notifications: Vec::new(),
+            sleep_timer: None,
             visualizer_data: vec![0.0; 20],
             fft_plan,
             fft_buffer: vec![Complex { re: 0.0, im: 0.0 }; 1024],
@@ -103,7 +152,13 @@ impl App {
         self.tracks = self.db.get_all_tracks()?;
         self.artists = self.db.get_artists()?;
         self.albums = self.db.get_albums()?;
-        self.playlists = self.db.get_playlists()?;
+        self.genres = self.db.get_genres()?;
+        self.years = self.db.get_years()?;
+        let mut playlists = self.db.get_playlists()?;
+        playlists.insert(0, "⭐ Favorites".to_string());
+        playlists.insert(1, "🕒 Recently Played".to_string());
+        playlists.insert(2, "🔥 Most Played".to_string());
+        self.playlists = playlists;
         self.apply_search();
         Ok(())
     }
@@ -115,7 +170,12 @@ impl App {
             View::Home | View::PlaylistDetail => {
                 let base_tracks = if self.view == View::PlaylistDetail {
                     if let Some(p) = &self.selected_playlist {
-                        self.db.get_tracks_by_playlist(p).unwrap_or_default()
+                        match p.as_str() {
+                            "⭐ Favorites" => self.db.get_favorites().unwrap_or_default(),
+                            "🕒 Recently Played" => self.db.get_recently_played().unwrap_or_default(),
+                            "🔥 Most Played" => self.db.get_most_played().unwrap_or_default(),
+                            _ => self.db.get_tracks_by_playlist(p).unwrap_or_default(),
+                        }
                     } else {
                         Vec::new()
                     }
@@ -154,6 +214,28 @@ impl App {
                         .collect();
                 }
             }
+            View::Genres => {
+                if query.is_empty() {
+                    self.filtered_genres = self.genres.clone();
+                } else {
+                    self.filtered_genres = self.genres
+                        .iter()
+                        .filter(|g| g.to_lowercase().contains(&query))
+                        .cloned()
+                        .collect();
+                }
+            }
+            View::Years => {
+                if query.is_empty() {
+                    self.filtered_years = self.years.clone();
+                } else {
+                    self.filtered_years = self.years
+                        .iter()
+                        .filter(|y| y.to_string().contains(&query))
+                        .cloned()
+                        .collect();
+                }
+            }
             View::Playlists => {
                 if query.is_empty() {
                     self.filtered_playlists = self.playlists.clone();
@@ -165,7 +247,9 @@ impl App {
                         .collect();
                 }
             }
+            _ => {}
         }
+// ... (rest of apply_search)
 
         if self.table_state.selected().is_none() {
             self.table_state.select(Some(0));
@@ -229,6 +313,31 @@ impl App {
                 };
                 self.list_state.select(Some(i));
             }
+            View::Genres => {
+                let len = self.filtered_genres.len();
+                let i = match self.list_state.selected() {
+                    Some(i) => if i >= len.saturating_sub(1) { 0 } else { i + 1 },
+                    None => 0,
+                };
+                self.list_state.select(Some(i));
+            }
+            View::Years => {
+                let len = self.filtered_years.len();
+                let i = match self.list_state.selected() {
+                    Some(i) => if i >= len.saturating_sub(1) { 0 } else { i + 1 },
+                    None => 0,
+                };
+                self.list_state.select(Some(i));
+            }
+            View::Queue => {
+                let len = self.queue.len();
+                let i = match self.table_state.selected() {
+                    Some(i) => if i >= len.saturating_sub(1) { 0 } else { i + 1 },
+                    None => 0,
+                };
+                self.table_state.select(Some(i));
+            }
+            _ => {}
         }
     }
 
@@ -267,6 +376,30 @@ impl App {
                 };
                 self.list_state.select(Some(i));
             }
+            View::Genres => {
+                let len = self.filtered_genres.len();
+                let i = match self.list_state.selected() {
+                    Some(i) => if i == 0 { len.saturating_sub(1) } else { i - 1 },
+                    None => 0,
+                };
+                self.list_state.select(Some(i));
+            }
+            View::Years => {
+                let len = self.filtered_years.len();
+                let i = match self.list_state.selected() {
+                    Some(i) => if i == 0 { len.saturating_sub(1) } else { i - 1 },
+                    None => 0,
+                };
+                self.list_state.select(Some(i));
+            }
+            View::Queue => {
+                let len = self.queue.len();
+                let i = match self.table_state.selected() {
+                    Some(i) => if i == 0 { len.saturating_sub(1) } else { i - 1 },
+                    None => 0,
+                };
+                self.table_state.select(Some(i));
+            }
             View::Playlists => {
                 let len = self.filtered_playlists.len();
                 let i = match self.list_state.selected() {
@@ -275,6 +408,7 @@ impl App {
                 };
                 self.list_state.select(Some(i));
             }
+            _ => {}
         }
     }
 
@@ -287,6 +421,14 @@ impl App {
                         self.queue_index = idx;
                         self.current_track = Some(track.clone());
                         self.audio.play(&track.path);
+                        let _ = self.db.record_play(&track.path);
+                        self.update_shuffled_indices();
+                        if self.shuffle {
+                            if let Some(pos) = self.shuffled_indices.iter().position(|&r| r == idx) {
+                                self.shuffle_ptr = pos;
+                            }
+                        }
+                        let _ = self.save_state();
                     }
                 }
             }
@@ -312,6 +454,28 @@ impl App {
                     }
                 }
             }
+            View::Genres => {
+                if let Some(idx) = self.list_state.selected() {
+                    if let Some(genre) = self.filtered_genres.get(idx).cloned() {
+                        if let Ok(tracks) = self.db.get_tracks_by_genre(&genre) {
+                            self.filtered_tracks = tracks;
+                            self.view = View::Home;
+                            self.table_state.select(Some(0));
+                        }
+                    }
+                }
+            }
+            View::Years => {
+                if let Some(idx) = self.list_state.selected() {
+                    if let Some(year) = self.filtered_years.get(idx) {
+                        if let Ok(tracks) = self.db.get_tracks_by_year(*year) {
+                            self.filtered_tracks = tracks;
+                            self.view = View::Home;
+                            self.table_state.select(Some(0));
+                        }
+                    }
+                }
+            }
             View::Playlists => {
                 if let Some(idx) = self.list_state.selected() {
                     if let Some(playlist) = self.filtered_playlists.get(idx).cloned() {
@@ -321,6 +485,202 @@ impl App {
                         self.apply_search();
                     }
                 }
+            }
+            View::Queue => {
+                if let Some(idx) = self.table_state.selected() {
+                    if let Some(track) = self.queue.get(idx).cloned() {
+                        self.queue_index = idx;
+                        self.current_track = Some(track.clone());
+                        self.audio.play(&track.path);
+                        let _ = self.db.record_play(&track.path);
+                        if self.shuffle {
+                            if let Some(pos) = self.shuffled_indices.iter().position(|&r| r == idx) {
+                                self.shuffle_ptr = pos;
+                            }
+                        }
+                        let _ = self.save_state();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn move_queue_up(&mut self) {
+        if self.view != View::Queue { return; }
+        if let Some(idx) = self.table_state.selected() {
+            if idx > 0 {
+                self.queue.swap(idx, idx - 1);
+                self.table_state.select(Some(idx - 1));
+                if self.queue_index == idx { self.queue_index = idx - 1; }
+                else if self.queue_index == idx - 1 { self.queue_index = idx; }
+                self.update_shuffled_indices();
+                let _ = self.save_state();
+            }
+        }
+    }
+
+    pub fn move_queue_down(&mut self) {
+        if self.view != View::Queue { return; }
+        if let Some(idx) = self.table_state.selected() {
+            if idx < self.queue.len().saturating_sub(1) {
+                self.queue.swap(idx, idx + 1);
+                self.table_state.select(Some(idx + 1));
+                if self.queue_index == idx { self.queue_index = idx + 1; }
+                else if self.queue_index == idx + 1 { self.queue_index = idx; }
+                self.update_shuffled_indices();
+                let _ = self.save_state();
+            }
+        }
+    }
+
+    pub fn update_shuffled_indices(&mut self) {
+        let mut indices: Vec<usize> = (0..self.queue.len()).collect();
+        if self.shuffle {
+            let mut rng = rand::rng();
+            indices.shuffle(&mut rng);
+        }
+        self.shuffled_indices = indices;
+    }
+
+    pub fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+        if self.shuffle {
+            self.update_shuffled_indices();
+            if let Some(pos) = self.shuffled_indices.iter().position(|&idx| idx == self.queue_index) {
+                self.shuffle_ptr = pos;
+            }
+        }
+        let _ = self.save_state();
+    }
+
+    pub fn toggle_repeat(&mut self) {
+        self.repeat_mode = match self.repeat_mode {
+            RepeatMode::None => RepeatMode::All,
+            RepeatMode::All => RepeatMode::One,
+            RepeatMode::One => RepeatMode::None,
+        };
+        let _ = self.save_state();
+    }
+
+    pub fn increase_speed(&mut self) {
+        let s = self.audio.playback_speed() + 0.1;
+        self.audio.set_speed(s);
+        let _ = self.save_state();
+    }
+
+    pub fn decrease_speed(&mut self) {
+        let s = self.audio.playback_speed() - 0.1;
+        self.audio.set_speed(s);
+        let _ = self.save_state();
+    }
+
+    pub fn load_state(&mut self) -> Result<()> {
+        if let Some(vol) = self.db.get_setting("volume")? {
+            if let Ok(v) = vol.parse::<f32>() {
+                self.audio.set_volume(v);
+            }
+        }
+        if let Some(speed) = self.db.get_setting("speed")? {
+            if let Ok(s) = speed.parse::<f32>() {
+                self.audio.set_speed(s);
+            }
+        }
+        if let Some(shuffle) = self.db.get_setting("shuffle")? {
+            self.shuffle = shuffle == "true";
+        }
+        if let Some(repeat) = self.db.get_setting("repeat")? {
+            self.repeat_mode = match repeat.as_str() {
+                "one" => RepeatMode::One,
+                "all" => RepeatMode::All,
+                _ => RepeatMode::None,
+            };
+        }
+        if let Some(queue_json) = self.db.get_setting("queue")? {
+            if let Ok(queue) = serde_json::from_str::<Vec<Track>>(&queue_json) {
+                self.queue = queue;
+            }
+        }
+        if let Some(q_idx) = self.db.get_setting("queue_index")? {
+            if let Ok(idx) = q_idx.parse::<usize>() {
+                self.queue_index = idx;
+            }
+        }
+        if let Some(current_path) = self.db.get_setting("current_track")? {
+            if let Some(track) = self.queue.iter().find(|t| t.path == current_path).cloned() {
+                self.current_track = Some(track);
+            }
+        }
+        if self.shuffle {
+            self.update_shuffled_indices();
+            if let Some(pos) = self.shuffled_indices.iter().position(|&idx| idx == self.queue_index) {
+                self.shuffle_ptr = pos;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn save_state(&self) -> Result<()> {
+        self.db.set_setting("volume", &self.audio.volume().to_string())?;
+        self.db.set_setting("speed", &self.audio.playback_speed().to_string())?;
+        self.db.set_setting("shuffle", &self.shuffle.to_string())?;
+        self.db.set_setting("repeat", match self.repeat_mode {
+            RepeatMode::None => "none",
+            RepeatMode::One => "one",
+            RepeatMode::All => "all",
+        })?;
+        self.db.set_setting("queue", &serde_json::to_string(&self.queue)?)?;
+        self.db.set_setting("queue_index", &self.queue_index.to_string())?;
+        if let Some(track) = &self.current_track {
+            self.db.set_setting("current_track", &track.path)?;
+        }
+        Ok(())
+    }
+
+    pub fn start_edit_metadata(&mut self) {
+        if let Some(idx) = self.table_state.selected() {
+            if let Some(track) = self.filtered_tracks.get(idx).cloned() {
+                self.edit_inputs[0] = Input::new(track.title.clone());
+                self.edit_inputs[1] = Input::new(track.artist.clone());
+                self.edit_inputs[2] = Input::new(track.album.clone());
+                self.edit_inputs[3] = Input::new(track.genre.clone());
+                self.edit_inputs[4] = Input::new(track.year.to_string());
+                self.input_mode = InputMode::EditMetadata(track, 0);
+            }
+        }
+    }
+
+    pub fn confirm_edit_metadata(&mut self, original_track: Track) {
+        let new_title = self.edit_inputs[0].value().to_string();
+        let new_artist = self.edit_inputs[1].value().to_string();
+        let new_album = self.edit_inputs[2].value().to_string();
+        let new_genre = self.edit_inputs[3].value().to_string();
+        let new_year = self.edit_inputs[4].value().parse::<i32>().unwrap_or(0);
+
+        let mut updated_track = original_track.clone();
+        updated_track.title = new_title;
+        updated_track.artist = new_artist;
+        updated_track.album = new_album;
+        updated_track.genre = new_genre;
+        updated_track.year = new_year;
+
+        // Save to file
+        if let Ok(_) = crate::library::save_metadata(&updated_track) {
+            // Update DB
+            let _ = self.db.insert_track(&updated_track);
+            let _ = self.load_tracks();
+            self.notify(format!("Updated: {}", updated_track.title));
+        } else {
+            self.notify("Failed to save metadata".to_string());
+        }
+        self.input_mode = InputMode::Normal;
+    }
+
+    pub fn toggle_favorite(&mut self) {
+        if let Some(idx) = self.table_state.selected() {
+            if let Some(track) = self.filtered_tracks.get(idx) {
+                let _ = self.db.toggle_favorite(&track.path);
+                let _ = self.load_tracks();
             }
         }
     }
@@ -345,24 +705,78 @@ impl App {
 
     pub fn play_next(&mut self) {
         if self.queue.is_empty() { return; }
-        self.queue_index = (self.queue_index + 1) % self.queue.len();
+
+        if self.repeat_mode == RepeatMode::One {
+            if let Some(track) = self.current_track.clone() {
+                self.audio.play(&track.path);
+                return;
+            }
+        }
+
+        if self.shuffle {
+            self.shuffle_ptr += 1;
+            if self.shuffle_ptr >= self.shuffled_indices.len() {
+                if self.repeat_mode == RepeatMode::All {
+                    self.shuffle_ptr = 0;
+                    let mut rng = rand::rng();
+                    self.shuffled_indices.shuffle(&mut rng);
+                } else {
+                    return;
+                }
+            }
+            self.queue_index = self.shuffled_indices[self.shuffle_ptr];
+        } else {
+            if self.queue_index >= self.queue.len() - 1 {
+                if self.repeat_mode == RepeatMode::All {
+                    self.queue_index = 0;
+                } else {
+                    return;
+                }
+            } else {
+                self.queue_index += 1;
+            }
+        }
+
         if let Some(track) = self.queue.get(self.queue_index).cloned() {
             self.current_track = Some(track.clone());
             self.audio.play(&track.path);
+            let _ = self.db.record_play(&track.path);
         }
+        let _ = self.save_state();
     }
 
     pub fn play_prev(&mut self) {
         if self.queue.is_empty() { return; }
-        if self.queue_index == 0 {
-            self.queue_index = self.queue.len() - 1;
+
+        if self.shuffle {
+            if self.shuffle_ptr == 0 {
+                if self.repeat_mode == RepeatMode::All {
+                    self.shuffle_ptr = self.shuffled_indices.len() - 1;
+                } else {
+                    return;
+                }
+            } else {
+                self.shuffle_ptr -= 1;
+            }
+            self.queue_index = self.shuffled_indices[self.shuffle_ptr];
         } else {
-            self.queue_index -= 1;
+            if self.queue_index == 0 {
+                if self.repeat_mode == RepeatMode::All {
+                    self.queue_index = self.queue.len() - 1;
+                } else {
+                    return;
+                }
+            } else {
+                self.queue_index -= 1;
+            }
         }
+
         if let Some(track) = self.queue.get(self.queue_index).cloned() {
             self.current_track = Some(track.clone());
             self.audio.play(&track.path);
+            let _ = self.db.record_play(&track.path);
         }
+        let _ = self.save_state();
     }
 
     pub fn tick(&mut self) {
@@ -371,6 +785,18 @@ impl App {
         }
         self.marquee_offset = self.marquee_offset.wrapping_add(1);
         self.update_visualizer();
+        
+        // Clean up notifications older than 3 seconds
+        self.notifications.retain(|(_, time)| time.elapsed() < Duration::from_secs(3));
+
+        // Handle sleep timer
+        if let Some((start, duration)) = self.sleep_timer {
+            if start.elapsed() >= duration {
+                self.audio.toggle(); // This will pause if playing
+                self.sleep_timer = None;
+                self.notify("Sleep timer expired".to_string());
+            }
+        }
     }
 
     pub fn update_visualizer(&mut self) {
@@ -379,7 +805,6 @@ impl App {
             return;
         }
 
-        // Lock-free access to atomic samples
         for (i, s) in self.audio.samples.iter().enumerate() {
             if i < self.fft_buffer.len() {
                 self.fft_buffer[i] = Complex { 
@@ -393,9 +818,6 @@ impl App {
 
         let num_bars = self.visualizer_data.len();
         let half = self.fft_buffer.len() / 2;
-
-        // Logarithmic frequency mapping: spread bass across fewer bars,
-        // give mids and highs more room so the display isn't dominated by bass.
         let min_freq: f32 = 1.0;
         let max_freq = half as f32;
         let log_min = min_freq.ln();
@@ -413,7 +835,6 @@ impl App {
                 .sum();
             let avg = sum / (hi - lo) as f32;
 
-            // Frequency-weighted: attenuate bass, boost highs so bars dance evenly
             let weight = 0.2 + 0.8 * (i as f32 / num_bars as f32);
             let db = (1.0 + avg * weight).ln() * 0.8;
             let val = db.clamp(0.0, 1.0);
@@ -427,12 +848,26 @@ impl App {
 
     pub fn seek_forward(&mut self) {
         let pos = self.audio.position();
-        self.audio.seek(pos + Duration::from_secs(10));
+        let new_pos = pos + Duration::from_secs(10);
+        if let Err(e) = self.audio.seek(new_pos) {
+            self.notify(format!("Seek Error: {}", e));
+        } else {
+            self.notify(format!("Seek: {:02}:{:02} -> {:02}:{:02}", 
+                pos.as_secs() / 60, pos.as_secs() % 60,
+                new_pos.as_secs() / 60, new_pos.as_secs() % 60));
+        }
     }
 
     pub fn seek_backward(&mut self) {
         let pos = self.audio.position();
-        self.audio.seek(pos.saturating_sub(Duration::from_secs(10)));
+        let new_pos = pos.saturating_sub(Duration::from_secs(10));
+        if let Err(e) = self.audio.seek(new_pos) {
+            self.notify(format!("Seek Error: {}", e));
+        } else {
+            self.notify(format!("Seek: {:02}:{:02} -> {:02}:{:02}", 
+                pos.as_secs() / 60, pos.as_secs() % 60,
+                new_pos.as_secs() / 60, new_pos.as_secs() % 60));
+        }
     }
 
     pub fn delete_playlist(&mut self, name: String) {
@@ -441,11 +876,61 @@ impl App {
         self.input_mode = InputMode::Normal;
     }
 
+    pub fn export_playlist(&mut self) {
+        if self.view == View::PlaylistDetail {
+            if let Some(name) = &self.selected_playlist {
+                let mut content = String::from("#EXTM3U\n");
+                for track in &self.filtered_tracks {
+                    content.push_str(&format!("#EXTINF:{},{}\n", track.duration_secs, track.title));
+                    content.push_str(&format!("{}\n", track.path));
+                }
+                
+                let export_path = dirs::home_dir()
+                    .unwrap_or_default()
+                    .join(format!("{}.m3u", name.replace(" ", "_")));
+                
+                let _ = std::fs::write(&export_path, content);
+                self.notify(format!("Exported: {}", export_path.display()));
+            }
+        } else if self.view == View::Queue {
+            let mut content = String::from("#EXTM3U\n");
+            for track in &self.queue {
+                content.push_str(&format!("#EXTINF:{},{}\n", track.duration_secs, track.title));
+                content.push_str(&format!("{}\n", track.path));
+            }
+            let export_path = dirs::home_dir().unwrap_or_default().join("queue.m3u");
+            let _ = std::fs::write(&export_path, content);
+            self.notify(format!("Exported: {}", export_path.display()));
+        }
+    }
+
+    pub fn cycle_sleep_timer(&mut self) {
+        let current_dur = self.sleep_timer.map(|(_, d)| d.as_secs() / 60);
+        let next = match current_dur {
+            None => Some(15),
+            Some(15) => Some(30),
+            Some(30) => Some(60),
+            _ => None,
+        };
+
+        if let Some(mins) = next {
+            self.sleep_timer = Some((Instant::now(), Duration::from_secs(mins * 60)));
+            self.notify(format!("Sleep timer set: {}m", mins));
+        } else {
+            self.sleep_timer = None;
+            self.notify("Sleep timer disabled".to_string());
+        }
+    }
+
+    pub fn notify(&mut self, message: String) {
+        self.notifications.push((message, Instant::now()));
+    }
+
     pub fn back(&mut self) {
         match self.view {
             View::PlaylistDetail => self.set_view(View::Playlists),
             View::Artists | View::Albums | View::Playlists => self.set_view(View::Home),
-            View::Home => {}
+            _ => {}
         }
     }
 }

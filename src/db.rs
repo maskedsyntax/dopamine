@@ -20,10 +20,22 @@ impl Db {
                 title TEXT,
                 artist TEXT,
                 album TEXT,
+                genre TEXT,
+                year INTEGER,
+                favorite INTEGER DEFAULT 0,
+                play_count INTEGER DEFAULT 0,
+                last_played INTEGER,
                 duration INTEGER
             )",
             [],
         )?;
+        
+        // Add columns if they don't exist
+        let _ = self.conn.execute("ALTER TABLE tracks ADD COLUMN genre TEXT DEFAULT 'Unknown'", []);
+        let _ = self.conn.execute("ALTER TABLE tracks ADD COLUMN year INTEGER DEFAULT 0", []);
+        let _ = self.conn.execute("ALTER TABLE tracks ADD COLUMN favorite INTEGER DEFAULT 0", []);
+        let _ = self.conn.execute("ALTER TABLE tracks ADD COLUMN play_count INTEGER DEFAULT 0", []);
+        let _ = self.conn.execute("ALTER TABLE tracks ADD COLUMN last_played INTEGER", []);
 
         self.conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_path ON tracks(path)",
@@ -38,17 +50,6 @@ impl Db {
             [],
         )?;
 
-        // Check if playlist_tracks has the old schema (track_id)
-        let has_track_id: bool = self.conn.query_row(
-            "SELECT count(*) FROM pragma_table_info('playlist_tracks') WHERE name='track_id'",
-            [],
-            |row| row.get::<_, i64>(0),
-        ).unwrap_or(0) > 0;
-
-        if has_track_id {
-            let _ = self.conn.execute("DROP TABLE playlist_tracks", []);
-        }
-
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS playlist_tracks (
                 playlist_id INTEGER,
@@ -60,12 +61,35 @@ impl Db {
             [],
         )?;
 
+        // Global deduplication by path
         self.conn.execute(
             "DELETE FROM tracks WHERE rowid NOT IN (SELECT MIN(rowid) FROM tracks GROUP BY path)",
             [],
         )?;
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )",
+            [],
+        )?;
         
         Ok(())
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        let res = stmt.query_row([key], |row| row.get(0)).ok();
+        Ok(res)
     }
 
     pub fn cleanup_stale_tracks(&self) -> Result<()> {
@@ -85,21 +109,102 @@ impl Db {
 
     pub fn insert_track(&self, track: &Track) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO tracks (path, title, artist, album, duration)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR REPLACE INTO tracks (path, title, artist, album, genre, year, favorite, play_count, last_played, duration)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 track.path,
                 track.title,
                 track.artist,
                 track.album,
+                track.genre,
+                track.year,
+                if track.favorite { 1 } else { 0 },
+                track.play_count,
+                track.last_played,
                 track.duration_secs
             ],
         )?;
         Ok(())
     }
 
+    pub fn toggle_favorite(&self, path: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET favorite = (1 - favorite) WHERE path = ?1",
+            [path],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_play(&self, path: &str) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        self.conn.execute(
+            "UPDATE tracks SET play_count = play_count + 1, last_played = ?1 WHERE path = ?2",
+            params![now, path],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_favorites(&self) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, duration 
+             FROM tracks 
+             WHERE favorite = 1 
+             GROUP BY title, artist, album
+             ORDER BY artist, album, title"
+        )?;
+        self.map_tracks(&mut stmt, [])
+    }
+
+    pub fn get_recently_played(&self) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, duration 
+             FROM tracks 
+             WHERE last_played IS NOT NULL 
+             GROUP BY title, artist, album
+             ORDER BY last_played DESC 
+             LIMIT 50"
+        )?;
+        self.map_tracks(&mut stmt, [])
+    }
+
+    pub fn get_most_played(&self) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, duration 
+             FROM tracks 
+             WHERE play_count > 0 
+             GROUP BY title, artist, album
+             ORDER BY play_count DESC 
+             LIMIT 50"
+        )?;
+        self.map_tracks(&mut stmt, [])
+    }
+
+    fn map_tracks(&self, stmt: &mut rusqlite::Statement, params: impl rusqlite::Params) -> Result<Vec<Track>> {
+        let tracks = stmt
+            .query_map(params, |row| {
+                Ok(Track {
+                    path: row.get(0)?,
+                    title: row.get(1)?,
+                    artist: row.get(2)?,
+                    album: row.get(3)?,
+                    genre: row.get(4)?,
+                    year: row.get(5)?,
+                    favorite: row.get::<_, i32>(6)? == 1,
+                    play_count: row.get(7)?,
+                    last_played: row.get(8)?,
+                    duration_secs: row.get(9)?,
+                })
+            })?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(tracks)
+    }
+
     pub fn get_artists(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT artist FROM tracks ORDER BY artist")?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT artist FROM tracks WHERE artist != 'Unknown Artist' ORDER BY artist")?;
         let artists = stmt
             .query_map([], |row| row.get(0))?
             .filter_map(Result::ok)
@@ -108,7 +213,7 @@ impl Db {
     }
 
     pub fn get_albums(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT album FROM tracks ORDER BY album")?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT album FROM tracks WHERE album != 'Unknown Album' ORDER BY album")?;
         let albums = stmt
             .query_map([], |row| row.get(0))?
             .filter_map(Result::ok)
@@ -116,72 +221,76 @@ impl Db {
         Ok(albums)
     }
 
-    pub fn get_tracks_by_artist(&self, artist: &str) -> Result<Vec<Track>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, duration 
-             FROM tracks 
-             WHERE artist = ? 
-             GROUP BY title, artist, album 
-             ORDER BY album, title"
-        )?;
-        let tracks = stmt
-            .query_map([artist], |row| {
-                Ok(Track {
-                    path: row.get(0)?,
-                    title: row.get(1)?,
-                    artist: row.get(2)?,
-                    album: row.get(3)?,
-                    duration_secs: row.get(4)?,
-                })
-            })?
+    pub fn get_genres(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT genre FROM tracks WHERE genre != 'Unknown' ORDER BY genre")?;
+        let genres = stmt
+            .query_map([], |row| row.get(0))?
             .filter_map(Result::ok)
             .collect();
-        Ok(tracks)
+        Ok(genres)
+    }
+
+    pub fn get_years(&self) -> Result<Vec<i32>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT year FROM tracks WHERE year > 0 ORDER BY year DESC")?;
+        let years = stmt
+            .query_map([], |row| row.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(years)
+    }
+
+    pub fn get_tracks_by_artist(&self, artist: &str) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, duration 
+             FROM tracks 
+             WHERE artist = ? 
+             GROUP BY title, artist, album
+             ORDER BY album, title"
+        )?;
+        self.map_tracks(&mut stmt, [artist])
     }
 
     pub fn get_tracks_by_album(&self, album: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, duration 
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, duration 
              FROM tracks 
              WHERE album = ? 
-             GROUP BY title, artist, album 
+             GROUP BY title, artist, album
              ORDER BY title"
         )?;
-        let tracks = stmt
-            .query_map([album], |row| {
-                Ok(Track {
-                    path: row.get(0)?,
-                    title: row.get(1)?,
-                    artist: row.get(2)?,
-                    album: row.get(3)?,
-                    duration_secs: row.get(4)?,
-                })
-            })?
-            .filter_map(Result::ok)
-            .collect();
-        Ok(tracks)
+        self.map_tracks(&mut stmt, [album])
+    }
+
+    pub fn get_tracks_by_genre(&self, genre: &str) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, duration 
+             FROM tracks 
+             WHERE genre = ? 
+             GROUP BY title, artist, album
+             ORDER BY artist, album, title"
+        )?;
+        self.map_tracks(&mut stmt, [genre])
+    }
+
+    pub fn get_tracks_by_year(&self, year: i32) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, duration 
+             FROM tracks 
+             WHERE year = ? 
+             GROUP BY title, artist, album
+             ORDER BY artist, album, title"
+        )?;
+        self.map_tracks(&mut stmt, [year])
     }
 
     pub fn get_all_tracks(&self) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, duration 
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, duration 
              FROM tracks 
-             GROUP BY title, artist, album 
+             GROUP BY title, artist, album
              ORDER BY artist, album, title"
         )?;
-        let tracks = stmt
-            .query_map([], |row| {
-                Ok(Track {
-                    path: row.get(0)?,
-                    title: row.get(1)?,
-                    artist: row.get(2)?,
-                    album: row.get(3)?,
-                    duration_secs: row.get(4)?,
-                })
-            })?
-            .filter_map(Result::ok)
-            .collect();
-        Ok(tracks)
+        self.map_tracks(&mut stmt, [])
     }
 
     pub fn get_playlists(&self) -> Result<Vec<String>> {
@@ -216,7 +325,7 @@ impl Db {
 
     pub fn get_tracks_by_playlist(&self, playlist_name: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT t.path, t.title, t.artist, t.album, t.duration 
+            "SELECT t.path, t.title, t.artist, t.album, t.genre, t.year, t.favorite, t.play_count, t.last_played, t.duration 
              FROM tracks t
              JOIN playlist_tracks pt ON t.path = pt.track_path
              JOIN playlists p ON pt.playlist_id = p.id
@@ -224,18 +333,6 @@ impl Db {
              GROUP BY t.title, t.artist, t.album
              ORDER BY t.title"
         )?;
-        let tracks = stmt
-            .query_map([playlist_name], |row| {
-                Ok(Track {
-                    path: row.get(0)?,
-                    title: row.get(1)?,
-                    artist: row.get(2)?,
-                    album: row.get(3)?,
-                    duration_secs: row.get(4)?,
-                })
-            })?
-            .filter_map(Result::ok)
-            .collect();
-        Ok(tracks)
+        self.map_tracks(&mut stmt, [playlist_name])
     }
 }
