@@ -5,6 +5,7 @@ mod library;
 mod models;
 mod ui;
 mod config;
+mod mpris;
 
 use anyhow::Result;
 use app::{App, Confirmation, InputMode};
@@ -23,6 +24,9 @@ enum Message {
     ScanStarted,
     ScanProgress(usize, usize),
     ScanFinished,
+    MprisPlayPause,
+    MprisNext,
+    MprisPrevious,
 }
 
 fn main() -> Result<()> {
@@ -35,11 +39,11 @@ fn main() -> Result<()> {
     let db_path = dirs::config_dir().unwrap_or_default().join("dopamine").join("library.db");
     std::fs::create_dir_all(db_path.parent().unwrap())?;
     
-    let mut app = App::new(db_path.to_str().unwrap())?;
+    let (tx, rx) = mpsc::channel();
+
+    let mut app = App::new(db_path.to_str().unwrap(), tx.clone())?;
     app.load_tracks()?;
     let _ = app.load_state();
-
-    let (tx, rx) = mpsc::channel();
 
     let res = run_app(&mut terminal, &mut app, tx, rx);
 
@@ -81,6 +85,9 @@ fn run_app(
                     app.scanning = false;
                     let _ = app.load_tracks();
                 }
+                Message::MprisPlayPause => app.toggle_playback(),
+                Message::MprisNext => app.play_next(),
+                Message::MprisPrevious => app.play_prev(),
             }
         }
 

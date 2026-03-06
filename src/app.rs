@@ -61,6 +61,7 @@ pub struct App {
     pub db: Db,
     pub audio: AudioEngine,
     pub config: Config,
+    pub mpris: crate::mpris::MprisEngine,
     pub view: View,
     pub tracks: Vec<Track>,
     pub artists: Vec<String>,
@@ -95,14 +96,18 @@ pub struct App {
     pub notifications: Vec<(String, Instant)>,
     pub sleep_timer: Option<(Instant, Duration)>, // (start_time, total_duration)
     pub preloaded_path: Option<String>,
+    pub crossfading: bool,
     pub audio_devices: Vec<String>,
     pub visualizer_data: Vec<f32>,
     pub fft_plan: Arc<dyn Fft<f32>>,
     pub fft_buffer: Vec<Complex<f32>>,
 }
 
+use std::sync::mpsc::Sender;
+use crate::Message;
+
 impl App {
-    pub fn new(db_path: &str) -> Result<Self> {
+    pub fn new(db_path: &str, tx: Sender<Message>) -> Result<Self> {
         let db = Db::new(db_path)?;
         db.init()?;
         let audio = AudioEngine::new()?;
@@ -110,10 +115,13 @@ impl App {
         let mut planner = FftPlanner::new();
         let fft_plan = planner.plan_fft_forward(1024);
         
+        let mpris = crate::mpris::MprisEngine::new(tx);
+        
         Ok(Self {
             db,
             audio,
             config,
+            mpris,
             view: View::Home,
             tracks: Vec::new(),
             artists: Vec::new(),
@@ -148,6 +156,7 @@ impl App {
             notifications: Vec::new(),
             sleep_timer: None,
             preloaded_path: None,
+            crossfading: false,
             audio_devices: AudioEngine::list_devices(),
             visualizer_data: vec![0.0; 20],
             fft_plan,
@@ -819,37 +828,61 @@ impl App {
                     // Check if we should preload next track
                     let pos = self.audio.position().as_secs();
                     let total = track.duration_secs.max(0) as u64;
-                    if total > 0 && total.saturating_sub(pos) <= 5 && self.preloaded_path.is_none() {
-                        // Preload next track
-                        let next_idx = if self.shuffle {
-                            let current_shuffle_pos = self.shuffled_indices.iter().position(|&i| i == self.queue_index).unwrap_or(0);
-                            if current_shuffle_pos < self.shuffled_indices.len() - 1 {
-                                Some(self.shuffled_indices[current_shuffle_pos + 1])
-                            } else if self.repeat_mode == RepeatMode::All {
-                                Some(self.shuffled_indices[0])
+                    if total > 0 {
+                        if total.saturating_sub(pos) <= 5 && self.preloaded_path.is_none() {
+                            // Preload next track (same logic as before)
+                            let next_idx = if self.shuffle {
+                                let current_shuffle_pos = self.shuffled_indices.iter().position(|&i| i == self.queue_index).unwrap_or(0);
+                                if current_shuffle_pos < self.shuffled_indices.len() - 1 {
+                                    Some(self.shuffled_indices[current_shuffle_pos + 1])
+                                } else if self.repeat_mode == RepeatMode::All {
+                                    Some(self.shuffled_indices[0])
+                                } else {
+                                    None
+                                }
                             } else {
-                                None
-                            }
-                        } else {
-                            if self.queue_index < self.queue.len() - 1 {
-                                Some(self.queue_index + 1)
-                            } else if self.repeat_mode == RepeatMode::All {
-                                Some(0)
-                            } else {
-                                None
-                            }
-                        };
+                                if self.queue_index < self.queue.len() - 1 {
+                                    Some(self.queue_index + 1)
+                                } else if self.repeat_mode == RepeatMode::All {
+                                    Some(0)
+                                } else {
+                                    None
+                                }
+                            };
 
-                        if let Some(idx) = next_idx {
-                            if let Some(next_track) = self.queue.get(idx) {
-                                let path = next_track.path.clone();
-                                self.audio.preload(&path);
-                                self.preloaded_path = Some(path);
+                            if let Some(idx) = next_idx {
+                                if let Some(next_track) = self.queue.get(idx) {
+                                    let path = next_track.path.clone();
+                                    self.audio.preload(&path);
+                                    self.preloaded_path = Some(path);
+                                }
+                            }
+                        }
+
+                        // Trigger Crossfade 2 seconds before end
+                        if total.saturating_sub(pos) <= 2 && self.preloaded_path.is_some() && !self.crossfading {
+                            self.crossfading = true;
+                            if let Some(next_path) = self.preloaded_path.take() {
+                                if let Some(next_track) = self.queue.iter().find(|t| t.path == next_path).cloned() {
+                                    self.current_track = Some(next_track);
+                                    if let Some(idx) = self.queue.iter().position(|t| t.path == next_path) {
+                                        self.queue_index = idx;
+                                    }
+                                }
+                                self.audio.swap_players(next_path);
+                                let _ = self.save_state();
                             }
                         }
                     }
                 }
             }
+        }
+        
+        if self.crossfading {
+            // We finished the transition or the new track is well underway
+            // In a real implementation we'd ramp volume here, but swap_players handles the hard cut.
+            // Let's just reset the flag for now.
+            self.crossfading = false;
         }
         
         self.marquee_offset = self.marquee_offset.wrapping_add(1);
@@ -866,6 +899,9 @@ impl App {
                 self.notify("Sleep timer expired".to_string());
             }
         }
+
+        // Sync MPRIS
+        self.mpris.update(self.audio.is_paused(), &self.current_track, self.audio.position());
     }
 
     pub fn update_visualizer(&mut self) {

@@ -161,6 +161,7 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, 
     let queue_highlight = app.view == View::Queue;
     let lyrics_highlight = app.view == View::Lyrics;
     let equalizer_highlight = app.view == View::Equalizer;
+    let devices_highlight = app.view == View::Devices;
 
     let mut sidebar_items = vec![
         Line::from(vec![Span::styled(if home_highlight { "❯ Home" } else { "  Home" }, if home_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
@@ -172,6 +173,7 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, 
         Line::from(vec![Span::styled(if queue_highlight { "❯ Queue" } else { "  Queue" }, if queue_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
         Line::from(vec![Span::styled(if lyrics_highlight { "❯ Lyrics" } else { "  Lyrics" }, if lyrics_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
         Line::from(vec![Span::styled(if equalizer_highlight { "❯ Equalizer" } else { "  Equalizer" }, if equalizer_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
+        Line::from(vec![Span::styled(if devices_highlight { "❯ Devices" } else { "  Devices" }, if devices_highlight { Style::default().fg(accent).bold() } else { Style::default().fg(fg) })]),
         Line::from(vec![Span::styled(" ", Style::default())]),
     ];
 
