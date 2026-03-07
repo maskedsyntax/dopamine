@@ -312,6 +312,10 @@ fn draw_lyrics(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, i
     };
 
     let lyrics_raw = match &track.lyrics {
+        Some(l) if l == "No lyrics available" => {
+            f.render_widget(Paragraph::new("No lyrics found online").alignment(Alignment::Center).block(block), area);
+            return;
+        }
         Some(l) => l,
         None => {
             f.render_widget(Paragraph::new("No lyrics found (.lrc file missing)").alignment(Alignment::Center), area);

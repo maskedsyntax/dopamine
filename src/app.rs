@@ -1076,19 +1076,23 @@ impl App {
         let lastfm_config = self.config.lastfm.clone();
         let track_clone = track.clone();
 
-        // Scrobble to Last.fm
+        // Scrobble to Last.fm (1 second delay to ensure metadata is settled)
         tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
             let _ = crate::network::scrobble_to_lastfm(&lastfm_config, &track_clone).await;
         });
 
-        // Fetch online lyrics if not present locally
-        if track.lyrics.is_none() {
+        // Fetch online lyrics if not present locally or marked as not found
+        let lyrics_missing = track.lyrics.is_none() || track.lyrics.as_deref() == Some("No lyrics available");
+        if lyrics_missing {
             self.notify(format!("Fetching lyrics for {}...", track.title));
             let tx_lyrics = self.tx.clone();
             let track_lyrics = track.clone();
             tokio::spawn(async move {
                 if let Some(content) = crate::network::fetch_online_lyrics(&track_lyrics).await {
                     let _ = tx_lyrics.send(Message::LyricsFetched(track_lyrics.path, content));
+                } else {
+                    let _ = tx_lyrics.send(Message::LyricsFetched(track_lyrics.path, "No lyrics available".to_string()));
                 }
             });
         }

@@ -92,6 +92,7 @@ fn run_app(
                 Message::MprisNext => app.play_next(),
                 Message::MprisPrevious => app.play_prev(),
                 Message::LyricsFetched(path, content) => {
+                    let is_error = content == "No lyrics available";
                     // Update track lyrics in memory and DB
                     if let Some(t) = app.tracks.iter_mut().find(|t| t.path == path) {
                         t.lyrics = Some(content.clone());
@@ -100,14 +101,11 @@ fn run_app(
                         if t.path == path {
                             t.lyrics = Some(content.clone());
                             let title = t.title.clone();
-                            app.notify(format!("Lyrics loaded: {}", title));
-                        }
-                    }
-                    // For gapless, check preloaded as well
-                    if let Some(p_path) = &app.preloaded_path {
-                        if *p_path == path {
-                            // We don't have direct access to preloaded track object in App, 
-                            // but it will be loaded from DB when swapped if we save it now.
+                            if is_error {
+                                app.notify(format!("No lyrics found: {}", title));
+                            } else {
+                                app.notify(format!("Lyrics loaded: {}", title));
+                            }
                         }
                     }
                     let _ = app.db.update_track_lyrics(&path, &content);
