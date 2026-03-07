@@ -13,31 +13,37 @@ pub struct LrcLibResponse {
 }
 
 pub async fn fetch_online_lyrics(track: &Track) -> Option<String> {
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
     
-    // 1. Try exact match first
-    let url = format!(
-        "https://lrclib.net/api/get?artist_name={}&track_name={}&album_name={}&duration={}",
-        urlencoding::encode(&track.artist),
-        urlencoding::encode(&track.title),
-        urlencoding::encode(&track.album),
+    let artist = track.artist.trim();
+    let title = track.title.trim();
+
+    // 1. Try exact match (without album, as album can be wrong/compilation)
+    let get_url = format!(
+        "https://lrclib.net/api/get?artist_name={}&track_name={}&duration={}",
+        urlencoding::encode(artist),
+        urlencoding::encode(title),
         track.duration_secs
     );
 
-    if let Ok(resp) = client.get(&url).send().await {
+    if let Ok(resp) = client.get(&get_url).send().await {
         if resp.status().is_success() {
             if let Ok(lyrics_data) = resp.json::<LrcLibResponse>().await {
-                return lyrics_data.synced_lyrics.or(lyrics_data.plain_lyrics);
+                if let Some(l) = lyrics_data.synced_lyrics.or(lyrics_data.plain_lyrics) {
+                    return Some(l);
+                }
             }
         }
     }
 
-    // 2. Fallback: Try search API if exact match fails
-    // This handles cases where duration or album name slightly differs
+    // 2. Fallback: Broader search if exact match fails
     let search_url = format!(
         "https://lrclib.net/api/search?artist_name={}&track_name={}",
-        urlencoding::encode(&track.artist),
-        urlencoding::encode(&track.title)
+        urlencoding::encode(artist),
+        urlencoding::encode(title)
     );
 
     if let Ok(resp) = client.get(search_url).send().await {

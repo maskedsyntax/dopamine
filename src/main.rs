@@ -93,10 +93,20 @@ fn run_app(
                 Message::MprisPrevious => app.play_prev(),
                 Message::LyricsFetched(path, content) => {
                     let is_error = content == "No lyrics available";
-                    // Update track lyrics in memory and DB
-                    if let Some(t) = app.tracks.iter_mut().find(|t| t.path == path) {
-                        t.lyrics = Some(content.clone());
-                    }
+                    
+                    // 1. Update all in-memory instances (Library, Search results, and Queue)
+                    let update_lists = |tracks: &mut Vec<crate::models::Track>| {
+                        for t in tracks.iter_mut() {
+                            if t.path == path {
+                                t.lyrics = Some(content.clone());
+                            }
+                        }
+                    };
+                    
+                    update_lists(&mut app.tracks);
+                    update_lists(&mut app.filtered_tracks);
+                    update_lists(&mut app.queue);
+                    
                     if let Some(t) = app.current_track.as_mut() {
                         if t.path == path {
                             t.lyrics = Some(content.clone());
@@ -108,7 +118,18 @@ fn run_app(
                             }
                         }
                     }
+
+                    // 2. Save to Database
                     let _ = app.db.update_track_lyrics(&path, &content);
+
+                    // 3. Save as .lrc file next to the music file if it's not an error
+                    if !is_error {
+                        let music_path = std::path::Path::new(&path);
+                        let lrc_path = music_path.with_extension("lrc");
+                        if !lrc_path.exists() {
+                            let _ = std::fs::write(lrc_path, &content);
+                        }
+                    }
                 }
             }
         }
@@ -218,7 +239,7 @@ fn run_app(
                             KeyCode::Char('e') => app.start_edit_metadata(),
                             KeyCode::Char('E') => app.export_playlist(),
                             KeyCode::Char('f') => app.toggle_favorite(),
-                            KeyCode::Char('T') => app.cycle_sleep_timer(),
+                            KeyCode::Char('y') | KeyCode::Char('Y') => app.cycle_sleep_timer(),
                             KeyCode::Char('a') => app.start_add_to_playlist(),
                             KeyCode::Backspace => app.back(),
                             KeyCode::Delete => {
@@ -230,7 +251,7 @@ fn run_app(
                                     }
                                 }
                             }
-                            KeyCode::Char('s') => {
+                            KeyCode::Char('S') => {
                                 if !app.scanning {
                                     app.scanning = true;
                                     let tx_clone = tx.clone();
@@ -256,18 +277,19 @@ fn run_app(
                                     });
                                 }
                             }
-                            KeyCode::Char('1') => app.set_view(app::View::Home),
-                            KeyCode::Char('2') => app.set_view(app::View::Artists),
-                            KeyCode::Char('3') => app.set_view(app::View::Albums),
-                            KeyCode::Char('4') => app.set_view(app::View::Playlists),
-                            KeyCode::Char('5') => app.set_view(app::View::Genres),
-                            KeyCode::Char('6') => app.set_view(app::View::Years),
-                            KeyCode::Char('7') => app.set_view(app::View::Queue),
-                            KeyCode::Char('8') => app.set_view(app::View::Lyrics),
-                            KeyCode::Char('9') => app.set_view(app::View::Equalizer),
-                            KeyCode::Char('0') => app.set_view(app::View::Devices),
-                            KeyCode::Char('+') if !key.modifiers.contains(event::KeyModifiers::SHIFT) => app.set_view(app::View::Dashboard),
-                            KeyCode::Char('n') => app.play_next(),
+                            KeyCode::Char('1') => app.set_view(app::View::Home, true),
+                            KeyCode::Char('2') => app.set_view(app::View::Artists, false),
+                            KeyCode::Char('3') => app.set_view(app::View::Albums, false),
+                            KeyCode::Char('4') => app.set_view(app::View::Playlists, false),
+                            KeyCode::Char('5') => app.set_view(app::View::Genres, false),
+                            KeyCode::Char('6') => app.set_view(app::View::Years, false),
+                            KeyCode::Char('7') => app.set_view(app::View::Queue, true),
+                            KeyCode::Char('8') => app.set_view(app::View::Lyrics, true),
+                            KeyCode::Char('9') => app.set_view(app::View::Equalizer, false),
+                            KeyCode::Char('0') => app.set_view(app::View::Devices, false),
+                            KeyCode::Char('+') if !key.modifiers.contains(event::KeyModifiers::SHIFT) => app.set_view(app::View::Dashboard, false),
+                            KeyCode::Char('t') | KeyCode::Char('T') => app.cycle_theme(),
+                            KeyCode::Char('s') => app.play_next(),
                             KeyCode::Char('p') => app.play_prev(),
                             KeyCode::Char('J') => app.move_queue_down(),
                             KeyCode::Char('K') => app.move_queue_up(),

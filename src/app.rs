@@ -176,7 +176,7 @@ impl App {
     }
 
     pub fn apply_search(&mut self) {
-        let query = self.search_input.value();
+        let query = self.search_input.value().to_lowercase();
         use fuzzy_matcher::FuzzyMatcher;
         use fuzzy_matcher::skim::SkimMatcherV2;
         let matcher = SkimMatcherV2::default();
@@ -203,8 +203,8 @@ impl App {
                 } else {
                     let mut scored: Vec<(i64, Track)> = base_tracks.into_iter()
                         .filter_map(|t| {
-                            let text = format!("{} {} {}", t.title, t.artist, t.album);
-                            matcher.fuzzy_match(&text, query).map(|score| (score, t))
+                            let text = format!("{} {} {}", t.title, t.artist, t.album).to_lowercase();
+                            matcher.fuzzy_match(&text, &query).map(|score| (score, t))
                         })
                         .collect();
                     scored.sort_by(|a, b| b.0.cmp(&a.0));
@@ -216,7 +216,7 @@ impl App {
                     self.filtered_artists = self.artists.clone();
                 } else {
                     let mut scored: Vec<(i64, String)> = self.artists.iter()
-                        .filter_map(|a| matcher.fuzzy_match(a, query).map(|score| (score, a.clone())))
+                        .filter_map(|a| matcher.fuzzy_match(&a.to_lowercase(), &query).map(|score| (score, a.clone())))
                         .collect();
                     scored.sort_by(|a, b| b.0.cmp(&a.0));
                     self.filtered_artists = scored.into_iter().map(|(_, a)| a).collect();
@@ -227,7 +227,7 @@ impl App {
                     self.filtered_albums = self.albums.clone();
                 } else {
                     let mut scored: Vec<(i64, String)> = self.albums.iter()
-                        .filter_map(|a| matcher.fuzzy_match(a, query).map(|score| (score, a.clone())))
+                        .filter_map(|a| matcher.fuzzy_match(&a.to_lowercase(), &query).map(|score| (score, a.clone())))
                         .collect();
                     scored.sort_by(|a, b| b.0.cmp(&a.0));
                     self.filtered_albums = scored.into_iter().map(|(_, a)| a).collect();
@@ -238,7 +238,7 @@ impl App {
                     self.filtered_genres = self.genres.clone();
                 } else {
                     let mut scored: Vec<(i64, String)> = self.genres.iter()
-                        .filter_map(|g| matcher.fuzzy_match(g, query).map(|score| (score, g.clone())))
+                        .filter_map(|g| matcher.fuzzy_match(&g.to_lowercase(), &query).map(|score| (score, g.clone())))
                         .collect();
                     scored.sort_by(|a, b| b.0.cmp(&a.0));
                     self.filtered_genres = scored.into_iter().map(|(_, g)| g).collect();
@@ -249,7 +249,7 @@ impl App {
                     self.filtered_years = self.years.clone();
                 } else {
                     let mut scored: Vec<(i64, i32)> = self.years.iter()
-                        .filter_map(|y| matcher.fuzzy_match(&y.to_string(), query).map(|score| (score, *y)))
+                        .filter_map(|y| matcher.fuzzy_match(&y.to_string(), &query).map(|score| (score, *y)))
                         .collect();
                     scored.sort_by(|a, b| b.0.cmp(&a.0));
                     self.filtered_years = scored.into_iter().map(|(_, y)| y).collect();
@@ -260,7 +260,7 @@ impl App {
                     self.filtered_playlists = self.playlists.clone();
                 } else {
                     let mut scored: Vec<(i64, String)> = self.playlists.iter()
-                        .filter_map(|p| matcher.fuzzy_match(p, query).map(|score| (score, p.clone())))
+                        .filter_map(|p| matcher.fuzzy_match(&p.to_lowercase(), &query).map(|score| (score, p.clone())))
                         .collect();
                     scored.sort_by(|a, b| b.0.cmp(&a.0));
                     self.filtered_playlists = scored.into_iter().map(|(_, p)| p).collect();
@@ -278,17 +278,44 @@ impl App {
         }
     }
 
-    pub fn set_view(&mut self, view: View) {
+    pub fn set_view(&mut self, view: View, focus_current: bool) {
         self.view = view;
-        self.search_input = Input::default(); 
+        self.search_input = Input::default();
         if view != View::PlaylistDetail {
             self.selected_playlist = None;
         }
-        self.table_state.select(Some(0));
-        self.list_state.select(Some(0));
+
         self.apply_search();
+
+        if focus_current {
+            if let Some(current) = &self.current_track {
+                if view == View::Home || view == View::PlaylistDetail || view == View::Queue {
+                    let target_list = if view == View::Queue { &self.queue } else { &self.filtered_tracks };
+                    if let Some(pos) = target_list.iter().position(|t| t.path == current.path) {
+                        self.table_state.select(Some(pos));
+                    } else {
+                        self.table_state.select(Some(0));
+                    }
+                } else {
+                    self.table_state.select(Some(0));
+                }
+            } else {
+                self.table_state.select(Some(0));
+            }
+        } else {
+            self.table_state.select(Some(0));
+        }
+        self.list_state.select(Some(0));
     }
 
+    pub fn cycle_theme(&mut self) {
+        let themes = vec!["mocha", "dracula", "nord", "monokai"];
+        let current_idx = themes.iter().position(|&t| t == self.config.theme_name).unwrap_or(0);
+        let next_idx = (current_idx + 1) % themes.len();
+        self.config.theme_name = themes[next_idx].to_string();
+        self.notify(format!("Theme: {}", self.config.theme_name));
+        let _ = self.save_state();
+    }
     pub fn next(&mut self) {
         if let InputMode::SelectPlaylist(_) = &self.input_mode {
             let len = self.playlists.len();
@@ -1082,8 +1109,8 @@ impl App {
             let _ = crate::network::scrobble_to_lastfm(&lastfm_config, &track_clone).await;
         });
 
-        // Fetch online lyrics if not present locally or marked as not found
-        let lyrics_missing = track.lyrics.is_none() || track.lyrics.as_deref() == Some("No lyrics available");
+        // Fetch online lyrics if not present locally
+        let lyrics_missing = track.lyrics.is_none();
         if lyrics_missing {
             self.notify(format!("Fetching lyrics for {}...", track.title));
             let tx_lyrics = self.tx.clone();
@@ -1157,8 +1184,8 @@ impl App {
 
     pub fn back(&mut self) {
         match self.view {
-            View::PlaylistDetail => self.set_view(View::Playlists),
-            View::Artists | View::Albums | View::Playlists | View::Genres | View::Years | View::Queue | View::Lyrics | View::Equalizer | View::Devices | View::Dashboard => self.set_view(View::Home),
+            View::PlaylistDetail => self.set_view(View::Playlists, false),
+            View::Artists | View::Albums | View::Playlists | View::Genres | View::Years | View::Queue | View::Lyrics | View::Equalizer | View::Devices | View::Dashboard => self.set_view(View::Home, true),
             View::Home => {}
         }
     }

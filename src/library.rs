@@ -59,16 +59,16 @@ where F: FnMut(usize, usize) {
 
                             if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
                                 if let Some(t) = tag.title().as_deref() {
-                                    title = t.to_string();
+                                    title = t.trim().to_string();
                                 }
                                 if let Some(a) = tag.artist().as_deref() {
-                                    artist = a.to_string();
+                                    artist = a.trim().to_string();
                                 }
                                 if let Some(al) = tag.album().as_deref() {
-                                    album = al.to_string();
+                                    album = al.trim().to_string();
                                 }
                                 if let Some(g) = tag.genre().as_deref() {
-                                    genre = g.to_string();
+                                    genre = g.trim().to_string();
                                 }
                                 if let Some(item) = tag.get(ItemKey::Year) {
                                     if let Some(y) = item.value().text() {
@@ -98,6 +98,7 @@ where F: FnMut(usize, usize) {
                                     play_count: 0,
                                     last_played: None,
                                     lyrics,
+                                    lyrics_offset_ms: 0,
                                     duration_secs: duration,
                                 });
                             }

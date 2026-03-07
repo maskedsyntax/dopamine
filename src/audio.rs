@@ -78,7 +78,7 @@ impl AudioEngine {
         host.output_devices()
             .map(|devices| {
                 devices
-                    .map(|d| d.name().unwrap_or_else(|_| "Unknown Device".to_string()))
+                    .map(|d| d.description().map(|desc| desc.name().to_string()).unwrap_or_else(|_| "Unknown Device".to_string()))
                     .collect()
             })
             .unwrap_or_default()
@@ -89,7 +89,7 @@ impl AudioEngine {
         let devices = host.output_devices()?;
         let device = devices
             .filter_map(|d| {
-                let name = d.name().ok()?;
+                let name = d.description().ok()?.name().to_string();
                 if name == device_name { Some(d) } else { None }
             })
             .next()
@@ -136,7 +136,7 @@ impl AudioEngine {
             _sink_handle: sink_handle,
             players: [p1, p2],
             active_idx: 0,
-            paused: false,
+            paused: true,
             volume: 0.5,
             playback_speed: 1.0,
             current_path: None,
