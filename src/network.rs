@@ -14,7 +14,7 @@ pub struct LrcLibResponse {
 pub async fn fetch_online_lyrics(track: &Track) -> Option<String> {
     let client = Client::new();
     let url = format!(
-        "https://lrclib.net/api/get?artist={}&track={}&album={}&duration={}",
+        "https://lrclib.net/api/get?artist_name={}&track_name={}&album_name={}&duration={}",
         urlencoding::encode(&track.artist),
         urlencoding::encode(&track.title),
         urlencoding::encode(&track.album),
