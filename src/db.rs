@@ -26,6 +26,7 @@ impl Db {
                 play_count INTEGER DEFAULT 0,
                 last_played INTEGER,
                 lyrics TEXT,
+                lyrics_offset INTEGER DEFAULT 0,
                 duration INTEGER
             )",
             [],
@@ -37,6 +38,7 @@ impl Db {
         let _ = self.conn.execute("ALTER TABLE tracks ADD COLUMN play_count INTEGER DEFAULT 0", []);
         let _ = self.conn.execute("ALTER TABLE tracks ADD COLUMN last_played INTEGER", []);
         let _ = self.conn.execute("ALTER TABLE tracks ADD COLUMN lyrics TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE tracks ADD COLUMN lyrics_offset INTEGER DEFAULT 0", []);
 
         self.conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_path ON tracks(path)",
@@ -109,8 +111,8 @@ impl Db {
 
     pub fn insert_track(&self, track: &Track) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO tracks (path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, duration)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT OR REPLACE INTO tracks (path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, lyrics_offset, duration)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 track.path,
                 track.title,
@@ -122,6 +124,7 @@ impl Db {
                 track.play_count,
                 track.last_played,
                 track.lyrics,
+                track.lyrics_offset_ms,
                 track.duration_secs
             ],
         )?;
@@ -156,9 +159,17 @@ impl Db {
         Ok(())
     }
 
+    pub fn update_lyrics_offset(&self, path: &str, offset_ms: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET lyrics_offset = ?1 WHERE path = ?2",
+            params![offset_ms, path],
+        )?;
+        Ok(())
+    }
+
     pub fn get_favorites(&self) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, duration 
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, lyrics_offset, duration 
              FROM tracks 
              WHERE favorite = 1 
              GROUP BY title, artist, album
@@ -169,7 +180,7 @@ impl Db {
 
     pub fn get_recently_played(&self) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, duration 
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, lyrics_offset, duration 
              FROM tracks 
              WHERE last_played IS NOT NULL 
              GROUP BY title, artist, album
@@ -181,7 +192,7 @@ impl Db {
 
     pub fn get_most_played(&self) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, duration 
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, lyrics_offset, duration 
              FROM tracks 
              WHERE play_count > 0 
              GROUP BY title, artist, album
@@ -205,7 +216,8 @@ impl Db {
                     play_count: row.get(7)?,
                     last_played: row.get(8)?,
                     lyrics: row.get(9)?,
-                    duration_secs: row.get(10)?,
+                    lyrics_offset_ms: row.get(10)?,
+                    duration_secs: row.get(11)?,
                 })
             })?
             .filter_map(Result::ok)
@@ -251,7 +263,7 @@ impl Db {
 
     pub fn get_tracks_by_artist(&self, artist: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, duration 
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, lyrics_offset, duration 
              FROM tracks 
              WHERE artist = ? 
              GROUP BY title, artist, album
@@ -262,7 +274,7 @@ impl Db {
 
     pub fn get_tracks_by_album(&self, album: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, duration 
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, lyrics_offset, duration 
              FROM tracks 
              WHERE album = ? 
              GROUP BY title, artist, album
@@ -273,7 +285,7 @@ impl Db {
 
     pub fn get_tracks_by_genre(&self, genre: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, duration 
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, lyrics_offset, duration 
              FROM tracks 
              WHERE genre = ? 
              GROUP BY title, artist, album
@@ -284,7 +296,7 @@ impl Db {
 
     pub fn get_tracks_by_year(&self, year: i32) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, duration 
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, lyrics_offset, duration 
              FROM tracks 
              WHERE year = ? 
              GROUP BY title, artist, album
@@ -295,34 +307,12 @@ impl Db {
 
     pub fn get_all_tracks(&self) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, duration 
+            "SELECT path, title, artist, album, genre, year, favorite, play_count, last_played, lyrics, lyrics_offset, duration 
              FROM tracks 
              GROUP BY title, artist, album
              ORDER BY artist, album, title"
         )?;
         self.map_tracks(&mut stmt, [])
-    }
-
-    pub fn get_top_artists(&self) -> Result<Vec<(String, i32)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT artist, SUM(play_count) as total_plays 
-             FROM tracks 
-             WHERE artist != 'Unknown Artist'
-             GROUP BY artist 
-             ORDER BY total_plays DESC 
-             LIMIT 10"
-        )?;
-        let artists = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .filter_map(Result::ok)
-            .collect();
-        Ok(artists)
-    }
-
-    pub fn get_total_stats(&self) -> Result<(i32, i64)> {
-        let mut stmt = self.conn.prepare("SELECT SUM(play_count), SUM(play_count * duration) FROM tracks")?;
-        let res = stmt.query_row([], |row| Ok((row.get::<_, Option<i32>>(0)?.unwrap_or(0), row.get::<_, Option<i64>>(1)?.unwrap_or(0))))?;
-        Ok(res)
     }
 
     pub fn get_playlists(&self) -> Result<Vec<String>> {
@@ -357,7 +347,7 @@ impl Db {
 
     pub fn get_tracks_by_playlist(&self, playlist_name: &str) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT t.path, t.title, t.artist, t.album, t.genre, t.year, t.favorite, t.play_count, t.last_played, t.lyrics, t.duration 
+            "SELECT t.path, t.title, t.artist, t.album, t.genre, t.year, t.favorite, t.play_count, t.last_played, t.lyrics, t.lyrics_offset, t.duration 
              FROM tracks t
              JOIN playlist_tracks pt ON t.path = pt.track_path
              JOIN playlists p ON pt.playlist_id = p.id

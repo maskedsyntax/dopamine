@@ -353,8 +353,11 @@ fn draw_lyrics(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, i
         return;
     }
 
-    let current_ms = app.audio.position().as_millis() as u64;
-    let active_idx = lines.iter().position(|(ms, _)| *ms > current_ms).unwrap_or(lines.len()).saturating_sub(1);
+    let current_ms = app.audio.position().as_millis() as i64;
+    let adjusted_ms = current_ms + track.lyrics_offset_ms;
+    
+    // Find active line index based on adjusted time
+    let active_idx = lines.iter().position(|(ms, _)| *ms as i64 > adjusted_ms).unwrap_or(lines.len()).saturating_sub(1);
 
     let inner_height = area.height.saturating_sub(2) as usize;
     let center_y = inner_height / 2;
@@ -376,6 +379,13 @@ fn draw_lyrics(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, i
         .scroll((scroll as u16, 0));
 
     f.render_widget(p, area);
+
+    // Display offset if not zero
+    if track.lyrics_offset_ms != 0 {
+        let offset_text = format!(" Offset: {}ms ", track.lyrics_offset_ms);
+        let offset_rect = Rect::new(area.x + area.width.saturating_sub(offset_text.len() as u16 + 2), area.y, offset_text.len() as u16, 1);
+        f.render_widget(Paragraph::new(offset_text).style(Style::default().fg(accent).bold()), offset_rect);
+    }
 }
 
 fn draw_equalizer(f: &mut Frame, app: &mut App, area: Rect, fg: Color, accent: Color, inactive: Color) {
@@ -656,7 +666,7 @@ fn draw_help(f: &mut Frame, fg: Color, bg: Color, accent: Color, primary: Color)
         Line::from(vec![Span::raw("  Space: Play/Pause | n/p: Next/Prev track")]),
         Line::from(vec![Span::raw("  h/l: Seek -/+ 10s | +/-: Volume")]),
         Line::from(vec![Span::raw("  z: Toggle Shuffle | r: Toggle Repeat")]),
-        Line::from(vec![Span::raw("  [/]: Adjust Playback Speed")]),
+        Line::from(vec![Span::raw("  [/]: Speed -/+    | {/}: Lyrics Sync -/+")]),
         Line::from(vec![Span::raw(" ")]),
         Line::from(vec![Span::styled("Management", Style::default().fg(primary).bold())]),
         Line::from(vec![Span::raw("  Ctrl-n: New Playlist | a: Add to Playlist")]),

@@ -13,4 +13,5 @@ pub struct Track {
     pub last_played: Option<i64>,
     pub duration_secs: i64,
     pub lyrics: Option<String>,
+    pub lyrics_offset_ms: i64,
 }

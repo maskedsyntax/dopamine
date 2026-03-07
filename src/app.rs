@@ -1145,6 +1145,16 @@ impl App {
         self.notify("Queue cleared".to_string());
     }
 
+    pub fn adjust_lyrics_offset(&mut self, delta_ms: i64) {
+        if let Some(track) = self.current_track.as_mut() {
+            track.lyrics_offset_ms += delta_ms;
+            let path = track.path.clone();
+            let offset = track.lyrics_offset_ms;
+            let _ = self.db.update_lyrics_offset(&path, offset);
+            self.notify(format!("Lyrics Offset: {}ms", offset));
+        }
+    }
+
     pub fn back(&mut self) {
         match self.view {
             View::PlaylistDetail => self.set_view(View::Playlists),

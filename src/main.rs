@@ -279,6 +279,8 @@ fn run_app(
                             KeyCode::Char('r') => app.toggle_repeat(),
                             KeyCode::Char('[') => app.decrease_speed(),
                             KeyCode::Char(']') => app.increase_speed(),
+                            KeyCode::Char('{') => app.adjust_lyrics_offset(-500),
+                            KeyCode::Char('}') => app.adjust_lyrics_offset(500),
                             KeyCode::Char('=') | KeyCode::Char('+') => {
                                 let v = app.audio.volume();
                                 app.audio.set_volume(v + 0.05);
