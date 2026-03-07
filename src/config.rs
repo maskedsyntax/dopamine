@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use std::fs;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Theme {
     pub fg: (u8, u8, u8),
     pub bg: (u8, u8, u8),
@@ -11,8 +11,8 @@ pub struct Theme {
     pub inactive: (u8, u8, u8),
 }
 
-impl Default for Theme {
-    fn default() -> Self {
+impl Theme {
+    pub fn mocha() -> Self {
         Self {
             fg: (205, 214, 244),
             bg: (30, 30, 46),
@@ -21,6 +21,45 @@ impl Default for Theme {
             accent: (203, 166, 247),
             inactive: (88, 91, 112),
         }
+    }
+
+    pub fn dracula() -> Self {
+        Self {
+            fg: (248, 248, 242),
+            bg: (40, 42, 54),
+            primary: (139, 233, 253),
+            secondary: (80, 250, 123),
+            accent: (189, 147, 249),
+            inactive: (98, 114, 164),
+        }
+    }
+
+    pub fn nord() -> Self {
+        Self {
+            fg: (236, 239, 244),
+            bg: (46, 52, 64),
+            primary: (136, 192, 208),
+            secondary: (163, 190, 140),
+            accent: (180, 142, 173),
+            inactive: (76, 86, 106),
+        }
+    }
+
+    pub fn monokai() -> Self {
+        Self {
+            fg: (248, 248, 242),
+            bg: (39, 40, 34),
+            primary: (102, 217, 239),
+            secondary: (166, 226, 46),
+            accent: (174, 129, 255),
+            inactive: (117, 113, 94),
+        }
+    }
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self::mocha()
     }
 }
 
@@ -46,7 +85,8 @@ impl Default for LastFmConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub music_dirs: Vec<String>,
-    pub theme: Theme,
+    pub theme_name: String,
+    pub custom_theme: Option<Theme>,
     pub lastfm: LastFmConfig,
 }
 
@@ -65,7 +105,8 @@ impl Default for Config {
         
         Self {
             music_dirs,
-            theme: Theme::default(),
+            theme_name: "mocha".to_string(),
+            custom_theme: None,
             lastfm: LastFmConfig::default(),
         }
     }
@@ -88,5 +129,17 @@ impl Config {
         let _ = fs::create_dir_all(config_path.parent().unwrap());
         let _ = fs::write(&config_path, toml::to_string(&default_config).unwrap());
         default_config
+    }
+
+    pub fn get_theme(&self) -> Theme {
+        if let Some(custom) = &self.custom_theme {
+            return custom.clone();
+        }
+        match self.theme_name.to_lowercase().as_str() {
+            "dracula" => Theme::dracula(),
+            "nord" => Theme::nord(),
+            "monokai" => Theme::monokai(),
+            _ => Theme::mocha(),
+        }
     }
 }

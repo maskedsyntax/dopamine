@@ -2,7 +2,7 @@ use anyhow::Result;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source, Sample, ChannelCount, SampleRate, source::SeekError};
 use std::fs::File;
 use std::io::BufReader;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
@@ -67,6 +67,7 @@ pub struct AudioEngine {
     seek_offset: Duration,
     pub eq_bands: [f32; 10], // Gain in dB (-10 to +10)
     pub eq_enabled: bool,
+    pub fading: Option<(usize, usize, Instant)>, // (out_idx, in_idx, start_time)
     pub samples: Arc<Vec<AtomicI32>>,
     pub index: Arc<AtomicUsize>,
 }
@@ -142,6 +143,7 @@ impl AudioEngine {
             seek_offset: Duration::default(),
             eq_bands: [0.0; 10],
             eq_enabled: false,
+            fading: None,
             samples,
             index,
         })
@@ -201,20 +203,51 @@ impl AudioEngine {
         self.current_path = Some(next_path);
         self.seek_offset = Duration::default();
         
-        self.players[new_idx].set_volume(self.volume);
-        self.players[old_idx].set_volume(0.0);
-        self.players[old_idx].clear();
+        // Start fading
+        self.fading = Some((old_idx, new_idx, Instant::now()));
         
-        // Note: To get the visualizer working on the new track immediately,
-        // we'd ideally re-wrap the preloaded decoder. 
-        // But since it's already appended to the Player, we might just have to 
-        // accept a tiny gap or skip visualizer for preloaded tracks until 
-        // they are "played" normally.
-        // For true gapless with visualizer, we need a better architecture.
-        // Let's just re-play for now to keep visualizer consistent.
         if let Some(p) = &self.current_path {
             let path = p.clone();
-            self.play(&path);
+            self.play_on_idx(new_idx, &path);
+        }
+    }
+
+    fn play_on_idx(&mut self, idx: usize, path: &str) {
+        if let Ok(file) = File::open(path) {
+            if let Ok(decoder) = Decoder::try_from(BufReader::new(file)) {
+                self.players[idx].clear();
+                let viz_source = VisualizerSource::new(decoder, Arc::clone(&self.samples), Arc::clone(&self.index));
+                
+                let mut source: Box<dyn Source<Item = Sample> + Send> = Box::new(viz_source);
+                if self.eq_enabled {
+                    if self.eq_bands[0] < -2.0 { source = Box::new(source.high_pass(80)); }
+                    if self.eq_bands[9] < -2.0 { source = Box::new(source.low_pass(12000)); }
+                }
+
+                self.players[idx].append(source);
+                // Volume starts at 0 for fade in
+                self.players[idx].set_volume(0.0);
+                self.players[idx].set_speed(self.playback_speed);
+                self.players[idx].play();
+            }
+        }
+    }
+
+    pub fn update_fades(&mut self) {
+        if let Some((out_idx, in_idx, start)) = self.fading {
+            let elapsed = start.elapsed().as_secs_f32();
+            let duration = 2.0; // 2 second crossfade
+            
+            if elapsed >= duration {
+                self.players[in_idx].set_volume(self.volume);
+                self.players[out_idx].set_volume(0.0);
+                self.players[out_idx].clear();
+                self.fading = None;
+            } else {
+                let progress = elapsed / duration;
+                self.players[in_idx].set_volume(self.volume * progress);
+                self.players[out_idx].set_volume(self.volume * (1.0 - progress));
+            }
         }
     }
 

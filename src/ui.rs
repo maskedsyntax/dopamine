@@ -13,7 +13,7 @@ fn c(rgb: (u8, u8, u8)) -> Color {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let size = f.area();
-    let theme = &app.config.theme;
+    let theme = app.config.get_theme();
     let fg = c(theme.fg);
     let bg = c(theme.bg);
     let primary = c(theme.primary);
@@ -57,6 +57,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         View::Lyrics => draw_lyrics(f, app, main_chunks[1], fg, accent, inactive),
         View::Equalizer => draw_equalizer(f, app, main_chunks[1], fg, accent, inactive),
         View::Devices => draw_devices(f, app, main_chunks[1], fg, accent, inactive),
+        View::Dashboard => draw_dashboard(f, app, main_chunks[1], fg, primary, secondary, accent, inactive),
     }
     
     if let InputMode::SelectPlaylist(_) = &app.input_mode {
@@ -443,6 +444,87 @@ fn draw_devices(f: &mut Frame, app: &mut App, area: Rect, fg: Color, accent: Col
     f.render_stateful_widget(l, area, &mut app.list_state);
 }
 
+fn draw_dashboard(f: &mut Frame, app: &App, area: Rect, fg: Color, primary: Color, secondary: Color, accent: Color, inactive: Color) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(inactive))
+        .title(" Statistics Dashboard ");
+
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(5), // Summary
+            Constraint::Percentage(45), // Top Artists
+            Constraint::Percentage(45), // Top Tracks
+        ])
+        .margin(2)
+        .split(area);
+
+    // 1. Summary
+    if let Ok((total_plays, total_secs)) = app.db.get_total_stats() {
+        let hours = total_secs / 3600;
+        let mins = (total_secs % 3600) / 60;
+        
+        let stats_text = vec![
+            Line::from(vec![
+                Span::styled(" Total Plays: ", Style::default().fg(fg)),
+                Span::styled(total_plays.to_string(), Style::default().fg(accent).bold()),
+                Span::styled("   Total Time: ", Style::default().fg(fg)),
+                Span::styled(format!("{}h {}m", hours, mins), Style::default().fg(secondary).bold()),
+            ]),
+        ];
+        
+        f.render_widget(Paragraph::new(stats_text).block(Block::default().title(" Overall Summary ").borders(Borders::BOTTOM).border_style(Style::default().fg(inactive))), chunks[0]);
+    }
+
+    // 2. Top Artists
+    if let Ok(artists) = app.db.get_top_artists() {
+        let rows = artists.into_iter().enumerate().map(|(i, (name, count))| {
+            Row::new(vec![
+                Cell::from((i + 1).to_string()),
+                Cell::from(name),
+                Cell::from(format!("{} plays", count)),
+            ]).style(Style::default().fg(fg))
+        });
+        
+        let t = Table::new(rows, [
+            Constraint::Length(4),
+            Constraint::Percentage(70),
+            Constraint::Percentage(20),
+        ])
+        .block(Block::default().title(" Top Artists ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(inactive)))
+        .header(Row::new(vec!["#", "Artist", "Plays"]).style(Style::default().fg(primary).bold()));
+        
+        f.render_widget(t, chunks[1]);
+    }
+
+    // 3. Top Tracks
+    if let Ok(tracks) = app.db.get_most_played() {
+        let rows = tracks.into_iter().take(10).enumerate().map(|(i, t)| {
+            Row::new(vec![
+                Cell::from((i + 1).to_string()),
+                Cell::from(t.title),
+                Cell::from(t.artist),
+                Cell::from(format!("{} plays", t.play_count)),
+            ]).style(Style::default().fg(fg))
+        });
+
+        let t = Table::new(rows, [
+            Constraint::Length(4),
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+            Constraint::Percentage(20),
+        ])
+        .block(Block::default().title(" Most Played Tracks ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(inactive)))
+        .header(Row::new(vec!["#", "Title", "Artist", "Plays"]).style(Style::default().fg(primary).bold()));
+        
+        f.render_widget(t, chunks[2]);
+    }
+}
+
 fn draw_select_playlist(f: &mut Frame, app: &mut App, fg: Color, bg: Color, accent: Color) {
     let area = centered_rect(60, 40, f.area());
     f.render_widget(Clear, area);
@@ -562,7 +644,7 @@ fn draw_help(f: &mut Frame, fg: Color, bg: Color, accent: Color, primary: Color)
 
     let help_text = vec![
         Line::from(vec![Span::styled("Navigation", Style::default().fg(primary).bold())]),
-        Line::from(vec![Span::raw("  1-9, 0: Views (Home, Art, Alb, Gen, Year, Pl, Q, Ly, EQ, Dev)")]),
+        Line::from(vec![Span::raw("  1-9, 0, +: Views (Home, Art, Alb, Gen, Year, Pl, Q, Ly, EQ, Dev, Stats)")]),
         Line::from(vec![Span::raw("  j/k: Navigate list | Enter: Play/Select")]),
         Line::from(vec![Span::raw("  Backspace: Back | /: Search")]),
         Line::from(vec![Span::raw(" ")]),

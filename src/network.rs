@@ -20,6 +20,9 @@ pub async fn fetch_online_lyrics(track: &Track) -> Option<String> {
         urlencoding::encode(&track.album),
         track.duration_secs
     );
+    
+    // Debug print to see what we are sending
+    println!("Fetching lyrics: {}", url);
 
     if let Ok(resp) = client.get(url).send().await {
         if let Ok(lyrics_data) = resp.json::<LrcLibResponse>().await {

@@ -24,6 +24,7 @@ pub enum View {
     Lyrics,
     Equalizer,
     Devices,
+    Dashboard,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -808,6 +809,7 @@ impl App {
     }
 
     pub fn tick(&mut self) {
+        self.audio.update_fades();
         if let Some(track) = &self.current_track {
             if !self.audio.is_paused() {
                 if self.audio.is_empty() {
@@ -1081,6 +1083,7 @@ impl App {
 
         // Fetch online lyrics if not present locally
         if track.lyrics.is_none() {
+            self.notify(format!("Fetching lyrics for {}...", track.title));
             let tx_lyrics = self.tx.clone();
             let track_lyrics = track.clone();
             tokio::spawn(async move {
@@ -1091,10 +1094,57 @@ impl App {
         }
     }
 
+    pub fn remove_from_queue(&mut self) {
+        if self.view != View::Queue { return; }
+        if let Some(idx) = self.table_state.selected() {
+            if idx < self.queue.len() {
+                self.queue.remove(idx);
+                // Adjust queue_index if we removed a track before/at current
+                if idx < self.queue_index {
+                    self.queue_index = self.queue_index.saturating_sub(1);
+                } else if idx == self.queue_index {
+                    // We removed the playing track, skip to next
+                    if !self.queue.is_empty() {
+                        self.play_next();
+                    } else {
+                        self.current_track = None;
+                        self.audio.stop();
+                    }
+                }
+                
+                self.update_shuffled_indices();
+                let _ = self.save_state();
+                
+                // Adjust selection
+                if self.queue.is_empty() {
+                    self.table_state.select(None);
+                } else {
+                    self.table_state.select(Some(idx.min(self.queue.len() - 1)));
+                }
+            }
+        }
+    }
+
+    pub fn clear_queue(&mut self) {
+        if self.view != View::Queue { return; }
+        // Keep only current track if playing
+        if let Some(track) = self.current_track.clone() {
+            self.queue = vec![track];
+            self.queue_index = 0;
+        } else {
+            self.queue.clear();
+            self.queue_index = 0;
+        }
+        self.update_shuffled_indices();
+        self.table_state.select(Some(0));
+        let _ = self.save_state();
+        self.notify("Queue cleared".to_string());
+    }
+
     pub fn back(&mut self) {
         match self.view {
             View::PlaylistDetail => self.set_view(View::Playlists),
-            View::Artists | View::Albums | View::Playlists | View::Genres | View::Years | View::Queue | View::Lyrics | View::Equalizer | View::Devices => self.set_view(View::Home),
+            View::Artists | View::Albums | View::Playlists | View::Genres | View::Years | View::Queue | View::Lyrics | View::Equalizer | View::Devices | View::Dashboard => self.set_view(View::Home),
             View::Home => {}
         }
     }

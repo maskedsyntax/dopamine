@@ -99,6 +99,8 @@ fn run_app(
                     if let Some(t) = app.current_track.as_mut() {
                         if t.path == path {
                             t.lyrics = Some(content.clone());
+                            let title = t.title.clone();
+                            app.notify(format!("Lyrics loaded: {}", title));
                         }
                     }
                     // For gapless, check preloaded as well
@@ -266,10 +268,15 @@ fn run_app(
                             KeyCode::Char('8') => app.set_view(app::View::Lyrics),
                             KeyCode::Char('9') => app.set_view(app::View::Equalizer),
                             KeyCode::Char('0') => app.set_view(app::View::Devices),
+                            KeyCode::Char('+') if !key.modifiers.contains(event::KeyModifiers::SHIFT) => app.set_view(app::View::Dashboard),
                             KeyCode::Char('n') => app.play_next(),
                             KeyCode::Char('p') => app.play_prev(),
                             KeyCode::Char('J') => app.move_queue_down(),
                             KeyCode::Char('K') => app.move_queue_up(),
+                            KeyCode::Char('d') | KeyCode::Char('x') => app.remove_from_queue(),
+                            KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                                app.clear_queue();
+                            }
                             KeyCode::Char('z') => app.toggle_shuffle(),
                             KeyCode::Char('r') => app.toggle_repeat(),
                             KeyCode::Char('[') => app.decrease_speed(),

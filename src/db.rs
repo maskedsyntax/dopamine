@@ -303,6 +303,28 @@ impl Db {
         self.map_tracks(&mut stmt, [])
     }
 
+    pub fn get_top_artists(&self) -> Result<Vec<(String, i32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT artist, SUM(play_count) as total_plays 
+             FROM tracks 
+             WHERE artist != 'Unknown Artist'
+             GROUP BY artist 
+             ORDER BY total_plays DESC 
+             LIMIT 10"
+        )?;
+        let artists = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(artists)
+    }
+
+    pub fn get_total_stats(&self) -> Result<(i32, i64)> {
+        let mut stmt = self.conn.prepare("SELECT SUM(play_count), SUM(play_count * duration) FROM tracks")?;
+        let res = stmt.query_row([], |row| Ok((row.get::<_, Option<i32>>(0)?.unwrap_or(0), row.get::<_, Option<i64>>(1)?.unwrap_or(0))))?;
+        Ok(res)
+    }
+
     pub fn get_playlists(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare("SELECT name FROM playlists ORDER BY name")?;
         let playlists = stmt
