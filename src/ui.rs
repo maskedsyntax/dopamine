@@ -311,6 +311,12 @@ fn draw_lyrics(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, i
         }
     };
 
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(inactive))
+        .title(format!(" Lyrics: {} ", track.title));
+
     let lyrics_raw = match &track.lyrics {
         Some(l) if l == "No lyrics available" => {
             f.render_widget(Paragraph::new("No lyrics found online").alignment(Alignment::Center).block(block), area);
@@ -318,16 +324,10 @@ fn draw_lyrics(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, i
         }
         Some(l) => l,
         None => {
-            f.render_widget(Paragraph::new("No lyrics found (.lrc file missing)").alignment(Alignment::Center), area);
+            f.render_widget(Paragraph::new("No lyrics found (.lrc file missing)").alignment(Alignment::Center).block(block), area);
             return;
         }
     };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(inactive))
-        .title(format!(" Lyrics: {} ", track.title));
 
     let mut lines = Vec::new();
     for line in lyrics_raw.lines() {
