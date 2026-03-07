@@ -6,6 +6,7 @@ mod models;
 mod ui;
 mod config;
 mod mpris;
+mod network;
 
 use anyhow::Result;
 use app::{App, Confirmation, InputMode};
@@ -27,9 +28,11 @@ enum Message {
     MprisPlayPause,
     MprisNext,
     MprisPrevious,
+    LyricsFetched(String, String), // path, content
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -88,6 +91,25 @@ fn run_app(
                 Message::MprisPlayPause => app.toggle_playback(),
                 Message::MprisNext => app.play_next(),
                 Message::MprisPrevious => app.play_prev(),
+                Message::LyricsFetched(path, content) => {
+                    // Update track lyrics in memory and DB
+                    if let Some(t) = app.tracks.iter_mut().find(|t| t.path == path) {
+                        t.lyrics = Some(content.clone());
+                    }
+                    if let Some(t) = app.current_track.as_mut() {
+                        if t.path == path {
+                            t.lyrics = Some(content.clone());
+                        }
+                    }
+                    // For gapless, check preloaded as well
+                    if let Some(p_path) = &app.preloaded_path {
+                        if *p_path == path {
+                            // We don't have direct access to preloaded track object in App, 
+                            // but it will be loaded from DB when swapped if we save it now.
+                        }
+                    }
+                    let _ = app.db.update_track_lyrics(&path, &content);
+                }
             }
         }
 

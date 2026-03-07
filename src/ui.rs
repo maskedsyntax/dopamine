@@ -41,7 +41,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(chunks[1]);
 
     draw_sidebar(f, app, main_chunks[0], fg, accent, inactive, secondary);
-    draw_album_art(f, app, main_chunks[0], accent);
     
     match app.view {
         View::Home => draw_table(f, app, main_chunks[1], fg, primary, secondary, inactive),
@@ -58,7 +57,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         View::Lyrics => draw_lyrics(f, app, main_chunks[1], fg, accent, inactive),
         View::Equalizer => draw_equalizer(f, app, main_chunks[1], fg, accent, inactive),
         View::Devices => draw_devices(f, app, main_chunks[1], fg, accent, inactive),
-        View::MetadataEditor => {} 
     }
     
     if let InputMode::SelectPlaylist(_) = &app.input_mode {
@@ -196,60 +194,8 @@ fn draw_sidebar(f: &mut Frame, app: &App, area: Rect, fg: Color, accent: Color, 
     sidebar_items.push(Line::from(vec![Span::styled("  Del: Delete Playlist", Style::default().fg(inactive))]));
     sidebar_items.push(Line::from(vec![Span::styled("  q: Quit", Style::default().fg(inactive))]));
 
-    // Space for album art
-    for _ in 0..12 {
-        sidebar_items.push(Line::from(vec![Span::raw(" ")]));
-    }
-
     let p = Paragraph::new(sidebar_items).block(block);
     f.render_widget(p, area);
-}
-
-fn draw_album_art(f: &mut Frame, app: &App, area: Rect, _accent: Color) {
-    let track = match &app.current_track {
-        Some(t) => t,
-        None => return,
-    };
-
-    let art_data = match &track.album_art {
-        Some(art) => art,
-        None => return,
-    };
-
-    use base64::prelude::*;
-    let bytes = match BASE64_STANDARD.decode(art_data) {
-        Ok(b) => b,
-        Err(_) => return,
-    };
-
-    if let Ok(img) = image::load_from_memory(&bytes) {
-        let img = img.to_rgb8();
-        
-        // We use half-blocks to render the image
-        // ▀ - top half, ▄ - bottom half, █ - full block
-        // Each character represents two vertical pixels.
-        
-        let target_w = (area.width.saturating_sub(4)) as u32;
-        let target_h = 10; // Fixed height for art
-        let img = image::imageops::thumbnail(&img, target_w, target_h * 2);
-        
-        let start_y = area.y + area.height.saturating_sub(target_h as u16 + 2);
-        let start_x = area.x + 2;
-
-        for y in 0..target_h {
-            let mut spans = Vec::new();
-            for x in 0..target_w {
-                if x >= img.width() || (y * 2 + 1) >= img.height() { break; }
-                let top = img.get_pixel(x, y * 2);
-                let bottom = img.get_pixel(x, y * 2 + 1);
-                
-                spans.push(Span::styled("▀", Style::default()
-                    .fg(Color::Rgb(top[0], top[1], top[2]))
-                    .bg(Color::Rgb(bottom[0], bottom[1], bottom[2]))));
-            }
-            f.render_widget(Paragraph::new(Line::from(spans)), Rect::new(start_x, start_y + y as u16, target_w as u16, 1));
-        }
-    }
 }
 
 fn draw_table(f: &mut Frame, app: &mut App, area: Rect, fg: Color, primary: Color, secondary: Color, inactive: Color) {
@@ -490,7 +436,7 @@ fn draw_devices(f: &mut Frame, app: &mut App, area: Rect, fg: Color, accent: Col
     }).collect();
 
     let l = List::new(items)
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(inactive)).title(" Output Devices (Selection coming soon) "))
+        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(inactive)).title(" Output Devices (Enter to Select) "))
         .highlight_style(Style::default().bg(Color::Rgb(49, 50, 68)).fg(accent).add_modifier(Modifier::BOLD))
         .highlight_symbol("❯ ");
 
@@ -649,8 +595,10 @@ fn draw_notifications(f: &mut Frame, app: &App, bg: Color, accent: Color) {
     if app.notifications.is_empty() { return; }
 
     let area = f.area();
+    let max_notifications = (area.height / 3).saturating_sub(1) as usize;
     let mut y = 1;
-    for (msg, _) in app.notifications.iter().rev() {
+    
+    for (msg, _) in app.notifications.iter().rev().take(max_notifications) {
         let width = (msg.len() + 4) as u16;
         let rect = Rect::new(area.width.saturating_sub(width + 1), y, width, 3);
         f.render_widget(Clear, rect);

@@ -24,7 +24,6 @@ pub enum View {
     Lyrics,
     Equalizer,
     Devices,
-    MetadataEditor,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,12 +37,6 @@ pub enum RepeatMode {
 pub enum Confirmation {
     Quit,
     DeletePlaylist(String),
-}
-
-pub enum EditField {
-    Title,
-    Artist,
-    Album,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -62,6 +55,7 @@ pub struct App {
     pub audio: AudioEngine,
     pub config: Config,
     pub mpris: crate::mpris::MprisEngine,
+    pub tx: Sender<Message>,
     pub view: View,
     pub tracks: Vec<Track>,
     pub artists: Vec<String>,
@@ -115,13 +109,14 @@ impl App {
         let mut planner = FftPlanner::new();
         let fft_plan = planner.plan_fft_forward(1024);
         
-        let mpris = crate::mpris::MprisEngine::new(tx);
+        let mpris = crate::mpris::MprisEngine::new(tx.clone());
         
         Ok(Self {
             db,
             audio,
             config,
             mpris,
+            tx: tx.clone(),
             view: View::Home,
             tracks: Vec::new(),
             artists: Vec::new(),
@@ -446,6 +441,7 @@ impl App {
                         self.audio.play(&track.path);
                         self.preloaded_path = None;
                         let _ = self.db.record_play(&track.path);
+                        self.on_track_change(track.clone());
                         self.update_shuffled_indices();
                         if self.shuffle {
                             if let Some(pos) = self.shuffled_indices.iter().position(|&r| r == idx) {
@@ -507,6 +503,17 @@ impl App {
                         self.view = View::PlaylistDetail;
                         self.table_state.select(Some(0));
                         self.apply_search();
+                    }
+                }
+            }
+            View::Devices => {
+                if let Some(idx) = self.list_state.selected() {
+                    if let Some(device_name) = self.audio_devices.get(idx).cloned() {
+                        if let Err(e) = self.audio.set_device(&device_name) {
+                            self.notify(format!("Failed to set device: {}", e));
+                        } else {
+                            self.notify(format!("Output: {}", device_name));
+                        }
                     }
                 }
             }
@@ -730,13 +737,6 @@ impl App {
     pub fn play_next(&mut self) {
         if self.queue.is_empty() { return; }
 
-        if self.repeat_mode == RepeatMode::One {
-            if let Some(track) = self.current_track.clone() {
-                self.audio.play(&track.path);
-                return;
-            }
-        }
-
         if self.shuffle {
             self.shuffle_ptr += 1;
             if self.shuffle_ptr >= self.shuffled_indices.len() {
@@ -766,6 +766,7 @@ impl App {
             self.audio.play(&track.path);
             self.preloaded_path = None;
             let _ = self.db.record_play(&track.path);
+            self.on_track_change(track.clone());
         }
         let _ = self.save_state();
     }
@@ -801,6 +802,7 @@ impl App {
             self.audio.play(&track.path);
             self.preloaded_path = None;
             let _ = self.db.record_play(&track.path);
+            self.on_track_change(track.clone());
         }
         let _ = self.save_state();
     }
@@ -809,7 +811,16 @@ impl App {
         if let Some(track) = &self.current_track {
             if !self.audio.is_paused() {
                 if self.audio.is_empty() {
-                    // Current track finished, check if we have a preloaded track
+                    // Current track finished
+                    if self.repeat_mode == RepeatMode::One {
+                        if let Some(track) = self.current_track.clone() {
+                            self.audio.play(&track.path);
+                            let _ = self.db.record_play(&track.path);
+                            return;
+                        }
+                    }
+
+                    // Check if we have a preloaded track
                     if let Some(next_path) = self.preloaded_path.take() {
                         // Find the track in queue to update current_track info
                         if let Some(next_track) = self.queue.iter().find(|t| t.path == next_path).cloned() {
@@ -828,7 +839,7 @@ impl App {
                     // Check if we should preload next track
                     let pos = self.audio.position().as_secs();
                     let total = track.duration_secs.max(0) as u64;
-                    if total > 0 {
+                    if total > 0 && self.repeat_mode != RepeatMode::One {
                         if total.saturating_sub(pos) <= 5 && self.preloaded_path.is_none() {
                             // Preload next track (same logic as before)
                             let next_idx = if self.shuffle {
@@ -864,10 +875,11 @@ impl App {
                             self.crossfading = true;
                             if let Some(next_path) = self.preloaded_path.take() {
                                 if let Some(next_track) = self.queue.iter().find(|t| t.path == next_path).cloned() {
-                                    self.current_track = Some(next_track);
+                                    self.current_track = Some(next_track.clone());
                                     if let Some(idx) = self.queue.iter().position(|t| t.path == next_path) {
                                         self.queue_index = idx;
                                     }
+                                    self.on_track_change(next_track);
                                 }
                                 self.audio.swap_players(next_path);
                                 let _ = self.save_state();
@@ -1029,6 +1041,9 @@ impl App {
 
     pub fn notify(&mut self, message: String) {
         self.notifications.push((message, Instant::now()));
+        if self.notifications.len() > 5 {
+            self.notifications.remove(0);
+        }
     }
 
     pub fn toggle_equalizer(&mut self) {
@@ -1055,11 +1070,32 @@ impl App {
         }
     }
 
+    pub fn on_track_change(&mut self, track: Track) {
+        let lastfm_config = self.config.lastfm.clone();
+        let track_clone = track.clone();
+
+        // Scrobble to Last.fm
+        tokio::spawn(async move {
+            let _ = crate::network::scrobble_to_lastfm(&lastfm_config, &track_clone).await;
+        });
+
+        // Fetch online lyrics if not present locally
+        if track.lyrics.is_none() {
+            let tx_lyrics = self.tx.clone();
+            let track_lyrics = track.clone();
+            tokio::spawn(async move {
+                if let Some(content) = crate::network::fetch_online_lyrics(&track_lyrics).await {
+                    let _ = tx_lyrics.send(Message::LyricsFetched(track_lyrics.path, content));
+                }
+            });
+        }
+    }
+
     pub fn back(&mut self) {
         match self.view {
             View::PlaylistDetail => self.set_view(View::Playlists),
             View::Artists | View::Albums | View::Playlists | View::Genres | View::Years | View::Queue | View::Lyrics | View::Equalizer | View::Devices => self.set_view(View::Home),
-            _ => {}
+            View::Home => {}
         }
     }
 }

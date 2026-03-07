@@ -82,6 +82,40 @@ impl AudioEngine {
             })
             .unwrap_or_default()
     }
+
+    pub fn set_device(&mut self, device_name: &str) -> Result<()> {
+        let host = cpal::default_host();
+        let devices = host.output_devices()?;
+        let device = devices
+            .filter_map(|d| {
+                let name = d.name().ok()?;
+                if name == device_name { Some(d) } else { None }
+            })
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Device not found"))?;
+
+        // Re-initialize sink handle with selected device
+        let sink_handle = DeviceSinkBuilder::from_device(device)?
+            .with_error_callback(|_| {})
+            .open_sink_or_fallback()
+            .map_err(|_| anyhow::anyhow!("Failed to open selected audio stream"))?;
+        
+        // Re-create players on the new sink
+        let p1 = Player::connect_new(&sink_handle.mixer());
+        let p2 = Player::connect_new(&sink_handle.mixer());
+        
+        self._sink_handle = sink_handle;
+        self.players = [p1, p2];
+        
+        // Resume playback if it was active
+        if let Some(path) = self.current_path.clone() {
+            let pos = self.position();
+            self.play(&path);
+            let _ = self.seek(pos);
+        }
+        
+        Ok(())
+    }
     pub fn new() -> Result<Self> {
         let sink_handle = DeviceSinkBuilder::from_default_device()
             .map_err(|_| anyhow::anyhow!("Failed to open default audio stream"))?

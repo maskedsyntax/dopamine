@@ -56,7 +56,6 @@ where F: FnMut(usize, usize) {
                             let mut album = "Unknown Album".to_string();
                             let mut genre = "Unknown".to_string();
                             let mut year = 0;
-                            let mut album_art = None;
 
                             if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
                                 if let Some(t) = tag.title().as_deref() {
@@ -74,18 +73,6 @@ where F: FnMut(usize, usize) {
                                 if let Some(item) = tag.get(ItemKey::Year) {
                                     if let Some(y) = item.value().text() {
                                         year = y.parse::<i32>().unwrap_or(0);
-                                    }
-                                }
-
-                                // Extract Album Art
-                                if let Some(picture) = tag.pictures().first() {
-                                    if let Ok(img) = image::load_from_memory(picture.data()) {
-                                        let thumbnail = img.thumbnail(64, 64);
-                                        let mut buffer = std::io::Cursor::new(Vec::new());
-                                        if let Ok(_) = thumbnail.write_to(&mut buffer, image::ImageFormat::Jpeg) {
-                                            use base64::prelude::*;
-                                            album_art = Some(BASE64_STANDARD.encode(buffer.get_ref()));
-                                        }
                                     }
                                 }
                             }
@@ -110,7 +97,6 @@ where F: FnMut(usize, usize) {
                                     favorite: false,
                                     play_count: 0,
                                     last_played: None,
-                                    album_art,
                                     lyrics,
                                     duration_secs: duration,
                                 });

@@ -12,6 +12,5 @@ pub struct Track {
     pub play_count: i32,
     pub last_played: Option<i64>,
     pub duration_secs: i64,
-    pub album_art: Option<String>,
-    pub lyrics: Option<String>, // Raw LRC content
+    pub lyrics: Option<String>,
 }

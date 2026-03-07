@@ -25,9 +25,29 @@ impl Default for Theme {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+pub struct LastFmConfig {
+    pub api_key: String,
+    pub api_secret: String,
+    pub session_key: String,
+    pub enabled: bool,
+}
+
+impl Default for LastFmConfig {
+    fn default() -> Self {
+        Self {
+            api_key: "".to_string(),
+            api_secret: "".to_string(),
+            session_key: "".to_string(),
+            enabled: false,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub music_dirs: Vec<String>,
     pub theme: Theme,
+    pub lastfm: LastFmConfig,
 }
 
 impl Default for Config {
@@ -46,6 +66,7 @@ impl Default for Config {
         Self {
             music_dirs,
             theme: Theme::default(),
+            lastfm: LastFmConfig::default(),
         }
     }
 }
