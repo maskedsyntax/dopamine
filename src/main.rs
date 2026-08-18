@@ -1,371 +1,63 @@
-mod app;
-mod audio;
-mod db;
-mod library;
-mod models;
-mod ui;
-mod config;
-mod mpris;
-mod network;
-
 use anyhow::Result;
-use app::{App, Confirmation, InputMode};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::io;
-use std::sync::mpsc;
-use std::time::Duration;
-use tui_input::backend::crossterm::EventHandler;
+use dopamine::{app::App, tui};
+use ratatui::{Terminal, backend::CrosstermBackend};
+use std::{
+    io, panic,
+    time::{Duration, Instant},
+};
 
-enum Message {
-    ScanStarted,
-    ScanProgress(usize, usize),
-    ScanFinished,
-    MprisPlayPause,
-    MprisNext,
-    MprisPrevious,
-    LyricsFetched(String, String), // path, content
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn enter() -> Result<Self> {
+        enable_raw_mode()?;
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+        Ok(Self)
+    }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let db_path = dirs::config_dir().unwrap_or_default().join("dopamine").join("library.db");
-    std::fs::create_dir_all(db_path.parent().unwrap())?;
-    
-    let (tx, rx) = mpsc::channel();
-
-    let mut app = App::new(db_path.to_str().unwrap(), tx.clone())?;
-    app.load_tracks()?;
-    let _ = app.load_state();
-
-    let res = run_app(&mut terminal, &mut app, tx, rx);
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = res {
-        println!("{:?}", err)
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
     }
+}
 
+fn main() -> Result<()> {
+    let old_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stderr(), LeaveAlternateScreen, DisableMouseCapture);
+        old_hook(info);
+    }));
+    let _guard = TerminalGuard::enter()?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    terminal.clear()?;
+    let mut app = App::load()?;
+    let tick = Duration::from_millis(50);
+    let mut last_tick = Instant::now();
+
+    while !app.should_quit {
+        terminal.draw(|frame| tui::draw(frame, &mut app))?;
+        let timeout = tick.saturating_sub(last_tick.elapsed());
+        if event::poll(timeout)? {
+            match event::read()? {
+                Event::Key(key) => app.on_key(key),
+                Event::Mouse(mouse) => app.on_mouse(mouse, terminal.size()?.into()),
+                Event::Resize(_, _) => app.dismiss_transient_status(),
+                Event::FocusGained | Event::FocusLost | Event::Paste(_) => {}
+            }
+        }
+        if last_tick.elapsed() >= tick {
+            app.tick();
+            last_tick = Instant::now();
+        }
+    }
+    app.shutdown();
     Ok(())
-}
-
-fn run_app(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-    tx: mpsc::Sender<Message>,
-    rx: mpsc::Receiver<Message>,
-) -> io::Result<()> {
-    loop {
-        app.tick();
-        terminal.draw(|f| ui::draw(f, app))?;
-
-        while let Ok(msg) = rx.try_recv() {
-            match msg {
-                Message::ScanStarted => {
-                    app.scanning = true;
-                    app.scan_progress = (0, 0);
-                }
-                Message::ScanProgress(curr, total) => {
-                    app.scan_progress = (curr, total);
-                }
-                Message::ScanFinished => {
-                    app.scanning = false;
-                    let _ = app.load_tracks();
-                }
-                Message::MprisPlayPause => app.toggle_playback(),
-                Message::MprisNext => app.play_next(),
-                Message::MprisPrevious => app.play_prev(),
-                Message::LyricsFetched(path, content) => {
-                    let is_error = content == "No lyrics available";
-                    
-                    // 1. Update all in-memory instances (Library, Search results, and Queue)
-                    let update_lists = |tracks: &mut Vec<crate::models::Track>| {
-                        for t in tracks.iter_mut() {
-                            if t.path == path {
-                                t.lyrics = Some(content.clone());
-                            }
-                        }
-                    };
-                    
-                    update_lists(&mut app.tracks);
-                    update_lists(&mut app.filtered_tracks);
-                    update_lists(&mut app.queue);
-                    
-                    if let Some(t) = app.current_track.as_mut() {
-                        if t.path == path {
-                            t.lyrics = Some(content.clone());
-                            let title = t.title.clone();
-                            if is_error {
-                                app.notify(format!("No lyrics found: {}", title));
-                            } else {
-                                app.notify(format!("Lyrics loaded: {}", title));
-                            }
-                        }
-                    }
-
-                    // 2. Save to Database
-                    let _ = app.db.update_track_lyrics(&path, &content);
-
-                    // 3. Save as .lrc file next to the music file if it's not an error
-                    if !is_error {
-                        let music_path = std::path::Path::new(&path);
-                        let lrc_path = music_path.with_extension("lrc");
-                        if !lrc_path.exists() {
-                            let _ = std::fs::write(lrc_path, &content);
-                        }
-                    }
-                }
-            }
-        }
-
-        if event::poll(Duration::from_millis(10))? {
-            if let Event::Key(key) = event::read()? {
-                match &app.input_mode {
-                    InputMode::Search => {
-                        match key.code {
-                            KeyCode::Enter | KeyCode::Esc => {
-                                app.input_mode = InputMode::Normal;
-                                app.apply_search();
-                            }
-                            _ => {
-                                app.search_input.handle_event(&Event::Key(key));
-                                app.apply_search();
-                            }
-                        }
-                    }
-                    InputMode::CreatePlaylist => {
-                        match key.code {
-                            KeyCode::Enter => {
-                                let name = app.playlist_input.value().to_string();
-                                if !name.is_empty() {
-                                    let _ = app.db.create_playlist(&name);
-                                    let _ = app.load_tracks();
-                                }
-                                app.input_mode = InputMode::Normal;
-                                app.playlist_input.reset();
-                            }
-                            KeyCode::Esc => {
-                                app.input_mode = InputMode::Normal;
-                                app.playlist_input.reset();
-                            }
-                            _ => {
-                                app.playlist_input.handle_event(&Event::Key(key));
-                            }
-                        }
-                    }
-                    InputMode::SelectPlaylist(track) => {
-                        let track_clone = track.clone();
-                        match key.code {
-                            KeyCode::Enter => {
-                                app.confirm_add_to_playlist(track_clone);
-                            }
-                            KeyCode::Esc => {
-                                app.input_mode = InputMode::Normal;
-                            }
-                            KeyCode::Up | KeyCode::Char('k') => app.previous(),
-                            KeyCode::Down | KeyCode::Char('j') => app.next(),
-                            _ => {}
-                        }
-                    }
-                    InputMode::Confirm(conf) => {
-                        let conf_clone = conf.clone();
-                        match key.code {
-                            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                                match conf_clone {
-                                    Confirmation::Quit => return Ok(()),
-                                    Confirmation::DeletePlaylist(name) => {
-                                        app.delete_playlist(name);
-                                    }
-                                }
-                            }
-                            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                                app.input_mode = InputMode::Normal;
-                            }
-                            _ => {}
-                        }
-                    }
-                    InputMode::EditMetadata(track, field_idx) => {
-                        let track_clone = track.clone();
-                        let idx = *field_idx;
-                        match key.code {
-                            KeyCode::Enter => {
-                                app.confirm_edit_metadata(track_clone);
-                            }
-                            KeyCode::Esc => {
-                                app.input_mode = InputMode::Normal;
-                            }
-                            KeyCode::Tab => {
-                                app.input_mode = InputMode::EditMetadata(track_clone, (idx + 1) % 5);
-                            }
-                            KeyCode::BackTab => {
-                                app.input_mode = InputMode::EditMetadata(track_clone, (idx + 4) % 5);
-                            }
-                            _ => {
-                                app.edit_inputs[idx].handle_event(&Event::Key(key));
-                            }
-                        }
-                    }
-                    InputMode::Help => {
-                        if let KeyCode::Char('?') | KeyCode::Esc = key.code {
-                            app.input_mode = InputMode::Normal;
-                        }
-                    }
-                    InputMode::Normal => {
-                        match key.code {
-                            KeyCode::Char('q') => {
-                                app.input_mode = InputMode::Confirm(Confirmation::Quit);
-                            }
-                            KeyCode::Char('?') => app.input_mode = InputMode::Help,
-                            KeyCode::Char('/') => app.input_mode = InputMode::Search,
-                            KeyCode::Char('n') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                                app.input_mode = InputMode::CreatePlaylist;
-                            }
-                            KeyCode::Char('e') => app.start_edit_metadata(),
-                            KeyCode::Char('E') => app.export_playlist(),
-                            KeyCode::Char('f') => app.toggle_favorite(),
-                            KeyCode::Char('y') | KeyCode::Char('Y') => app.cycle_sleep_timer(),
-                            KeyCode::Char('a') => app.start_add_to_playlist(),
-                            KeyCode::Backspace => app.back(),
-                            KeyCode::Delete => {
-                                if app.view == app::View::Playlists {
-                                    if let Some(idx) = app.list_state.selected() {
-                                        if let Some(name) = app.filtered_playlists.get(idx).cloned() {
-                                            app.input_mode = InputMode::Confirm(Confirmation::DeletePlaylist(name));
-                                        }
-                                    }
-                                }
-                            }
-                            KeyCode::Char('S') => {
-                                if !app.scanning {
-                                    app.scanning = true;
-                                    let tx_clone = tx.clone();
-                                    let db_path = dirs::config_dir().unwrap_or_default().join("dopamine").join("library.db");
-                                    let db_path_str = db_path.to_str().unwrap().to_string();
-                                    let music_dirs = app.config.music_dirs.clone();
-                                    
-                                    std::thread::spawn(move || {
-                                        let _ = tx_clone.send(Message::ScanStarted);
-                                        if let Ok(db) = db::Db::new(&db_path_str) {
-                                            for dir in &music_dirs {
-                                                let t_tx = tx_clone.clone();
-                                                let tracks = library::scan_library(dir, |curr, total| {
-                                                    let _ = t_tx.send(Message::ScanProgress(curr, total));
-                                                });
-                                                for t in tracks {
-                                                    let _ = db.insert_track(&t);
-                                                }
-                                            }
-                                            let _ = db.cleanup_stale_tracks();
-                                        }
-                                        let _ = tx_clone.send(Message::ScanFinished);
-                                    });
-                                }
-                            }
-                            KeyCode::Char('1') => app.set_view(app::View::Home, true),
-                            KeyCode::Char('2') => app.set_view(app::View::Artists, false),
-                            KeyCode::Char('3') => app.set_view(app::View::Albums, false),
-                            KeyCode::Char('4') => app.set_view(app::View::Playlists, false),
-                            KeyCode::Char('5') => app.set_view(app::View::Genres, false),
-                            KeyCode::Char('6') => app.set_view(app::View::Years, false),
-                            KeyCode::Char('7') => app.set_view(app::View::Queue, true),
-                            KeyCode::Char('8') => app.set_view(app::View::Lyrics, true),
-                            KeyCode::Char('9') => app.set_view(app::View::Equalizer, false),
-                            KeyCode::Char('0') => app.set_view(app::View::Devices, false),
-                            KeyCode::Char('+') if !key.modifiers.contains(event::KeyModifiers::SHIFT) => app.set_view(app::View::Dashboard, false),
-                            KeyCode::Char('t') | KeyCode::Char('T') => app.cycle_theme(),
-                            KeyCode::Char('s') => app.play_next(),
-                            KeyCode::Char('p') => app.play_prev(),
-                            KeyCode::Char('J') => app.move_queue_down(),
-                            KeyCode::Char('K') => app.move_queue_up(),
-                            KeyCode::Char('d') | KeyCode::Char('x') => app.remove_from_queue(),
-                            KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                                app.clear_queue();
-                            }
-                            KeyCode::Char('z') => app.toggle_shuffle(),
-                            KeyCode::Char('r') => app.toggle_repeat(),
-                            KeyCode::Char('[') => app.decrease_speed(),
-                            KeyCode::Char(']') => app.increase_speed(),
-                            KeyCode::Char('{') => app.adjust_lyrics_offset(-500),
-                            KeyCode::Char('}') => app.adjust_lyrics_offset(500),
-                            KeyCode::Char('=') | KeyCode::Char('+') => {
-                                let v = app.audio.volume();
-                                app.audio.set_volume(v + 0.05);
-                                let _ = app.save_state();
-                            }
-                            KeyCode::Char('-') | KeyCode::Char('_') => {
-                                let v = app.audio.volume();
-                                app.audio.set_volume(v - 0.05);
-                                let _ = app.save_state();
-                            }
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                if app.view == app::View::Equalizer {
-                                    if let Some(idx) = app.list_state.selected() {
-                                        app.adjust_eq(idx, 1.0);
-                                    }
-                                } else {
-                                    app.previous();
-                                }
-                            }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                if app.view == app::View::Equalizer {
-                                    if let Some(idx) = app.list_state.selected() {
-                                        app.adjust_eq(idx, -1.0);
-                                    }
-                                } else {
-                                    app.next();
-                                }
-                            }
-                            KeyCode::Left | KeyCode::Char('h') => {
-                                if app.view == app::View::Equalizer {
-                                    let i = match app.list_state.selected() {
-                                        Some(i) => if i == 0 { 9 } else { i - 1 },
-                                        None => 0,
-                                    };
-                                    app.list_state.select(Some(i));
-                                } else {
-                                    app.seek_backward();
-                                }
-                            }
-                            KeyCode::Right | KeyCode::Char('l') => {
-                                if app.view == app::View::Equalizer {
-                                    let i = match app.list_state.selected() {
-                                        Some(i) => if i >= 9 { 0 } else { i + 1 },
-                                        None => 0,
-                                    };
-                                    app.list_state.select(Some(i));
-                                } else {
-                                    app.seek_forward();
-                                }
-                            }
-                            KeyCode::Enter => {
-                                if app.view == app::View::Equalizer {
-                                    app.toggle_equalizer();
-                                } else {
-                                    app.play_selected();
-                                }
-                            }
-                            KeyCode::Char(' ') => app.toggle_playback(),
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-    }
 }

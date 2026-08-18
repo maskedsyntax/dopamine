@@ -1,65 +1,88 @@
+<p align="center">
+  <img src="logo.png" alt="Dopamine logo" width="360">
+</p>
+
 # Dopamine
 
-**Pure audio adrenaline, served from the shell.**
-
-A polished, offline TUI music player for Windows, Linux, and macOS. Rewritten in Rust for extreme performance and a jitter-free experience.
+A keyboard-first Ratatui music player for a local, offline library, with an optional yt-dlp powered YouTube and YouTube Music import workflow.
 
 ## Features
-- **Fast & Lightweight**: Built with Rust and Ratatui for minimal CPU and memory footprint.
-- **Improved Lyrics System**:
-    - **Multi-stage Lookup**: Robust fetching with exact and fuzzy fallback strategies.
-    - **Local Storage**: Automatically saves lyrics as `.lrc` files next to your music and in the database.
-    - **Instant Access**: Fetched lyrics are synchronized across all views (Library, Search, Queue) for immediate display.
-    - **Manual Sync**: Fine-tune lyrics timing with on-the-fly offset adjustments.
-- **Smart Navigation**: Remembers your selection when navigating between views—automatically focuses the currently playing track when returning to the library.
-- **Theme Presets**: Includes built-in support for popular themes: Mocha, Dracula, Nord, and Monokai.
-- **Case-Insensitive Search**: Context-aware fuzzy search that ignores case across tracks, artists, albums, genres, and playlists.
-- **Stable UI**: Redesigned player bar with smooth marquee scrolling, real-time progress tracking, and logical playback controls.
-- **Background Scanning**: Multi-threaded library indexing with automatic deduplication and stale file cleanup.
-- **MPRIS Integration**: Control playback from system-wide media controls and see "Now Playing" status in your OS.
 
-## Tech Stack
-- **Language**: Rust
-- **TUI Framework**: [ratatui](https://github.com/ratatui/ratatui)
-- **Audio Engine**: [rodio](https://github.com/RustAudio/rodio)
-- **Database**: [rusqlite](https://github.com/rusqlite/rusqlite) (SQLite)
-- **Metadata**: [lofty](https://github.com/pdeljanov/lofty)
+- Local MP3, FLAC, OGG, WAV, and M4A library scanning
+- Browsing by track, artist, album, genre, playlist, and smart collection
+- Search, favorites, play counts, recently played, and listening statistics
+- Play, pause, seek, previous/next, volume, speed, shuffle, repeat, and queue editing
+- Gapless decoder preloading, crossfade transitions, a real ten-band EQ, and FFT visualizer
+- Metadata editing, synchronized and plain lyrics, online lyrics lookup, and timing offsets
+- Output-device selection, sleep timer, themes, M3U export, Last.fm, and macOS media controls
+- Persistent SQLite library, playlists, queue, playback settings, and configuration
+- SoundSnatch wizard for YouTube and YouTube Music audio downloads
+- Responsive 80×24 terminal UI, fuzzy command palette, contextual actions, and mouse support
 
-## Installation
-Requires [Rust](https://www.rust-lang.org/tools/install).
+## SoundSnatch
+
+The Downloads view accepts a YouTube/YouTube Music URL or a song search. It supports:
+
+- Single tracks and playlists
+- MP3, FLAC, and WAV conversion
+- Destination folder browsing and folder creation
+- Live percentage and playlist item progress
+- Download archives that skip files already downloaded
+
+SoundSnatch delegates all media work to external tools:
+
+- `yt-dlp`, falling back to `python3 -m yt_dlp`
+- `ffmpeg`
+- `node`
+
+No YouTube OAuth, embedded login, API client, or media decoder is implemented in Dopamine.
+
+## Build
+
+Build and launch the terminal application:
 
 ```bash
-git clone https://github.com/maskedsyntax/dopamine.git
-cd dopamine
-cargo build --release
-./target/release/dopamine
+cargo run --release
 ```
 
-## Keybindings
+The UI requires an 80×24 or larger terminal. True color and mouse input are used when
+available; every workflow remains keyboard accessible.
 
-### Navigation
-- `1` - `0`: Switch views (Home, Artists, Albums, Playlists, Genres, Years, Queue, Lyrics, EQ, Devices)
-- `j` / `k` or `Arrows`: Navigate lists
-- `Enter`: Play selected track / Open folder or playlist
-- `Backspace`: Go back to previous view (Smart Focus: returns to currently playing track)
-- `/`: Search (Case-insensitive)
-- `Ctrl-n`: Create new playlist
-- `a`: Add highlighted track to playlist
-- `Delete`: Delete highlighted playlist (in Playlist view)
-- `t`: Cycle Theme presets (Mocha, Dracula, Nord, Monokai)
-- `y`: Cycle Sleep Timer
+## Controls
 
-### Playback & Audio
-- `Space`: Pause / Resume
-- `s`: Next track
-- `p`: Previous track
-- `h` / `l`: Seek backward / forward (10s)
-- `+` / `-`: Volume up / down
-- `S` (Shift+S): Scan library
-- `z`: Toggle Shuffle
-- `r`: Toggle Repeat mode (None, One, All)
-- `{` / `}`: Adjust lyrics offset (-/+ 500ms)
-- `q`: Quit (with confirmation)
+- Arrow keys or `j`/`k`: move selection
+- Enter: open or play the selected item
+- Space: play or pause
+- `/`: focus library search
+- `Ctrl+P`: open the searchable command palette
+- `p` / `n`: previous / next track
+- `<` / `>`: seek by 10 seconds
+- `f`: toggle favorite
+- `a`: open contextual actions
+- Delete: remove the selected queue item
+- `[` / `]`: adjust synchronized lyrics
+- `?`: show complete help
+- Escape: close an editor or navigate back
+
+Primary navigation, rows, and player controls are also available through the mouse.
 
 ## Configuration
-Dopamine stores its configuration in `~/.config/dopamine/config.toml`. You can specify your music directories and set your default theme here.
+
+Application configuration and library data:
+
+- `~/.config/dopamine/config.toml`
+- `~/.config/dopamine/library.db`
+
+SoundSnatch settings and global single-track archive:
+
+- `~/.soundsnatch.yaml`
+- `~/.soundsnatch_archive.txt`
+
+SoundSnatch settings remember the destination directory and output format.
+
+## Verification
+
+```bash
+cargo test
+cargo check --all-targets
+```

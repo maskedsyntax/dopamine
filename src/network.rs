@@ -1,9 +1,9 @@
-use crate::models::Track;
 use crate::config::LastFmConfig;
-use serde::Deserialize;
+use crate::models::Track;
 use reqwest::Client;
-use std::time::{SystemTime, UNIX_EPOCH};
+use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,7 +17,7 @@ pub async fn fetch_online_lyrics(track: &Track) -> Option<String> {
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .unwrap_or_default();
-    
+
     let artist = track.artist.trim();
     let title = track.title.trim();
 
@@ -29,14 +29,12 @@ pub async fn fetch_online_lyrics(track: &Track) -> Option<String> {
         track.duration_secs
     );
 
-    if let Ok(resp) = client.get(&get_url).send().await {
-        if resp.status().is_success() {
-            if let Ok(lyrics_data) = resp.json::<LrcLibResponse>().await {
-                if let Some(l) = lyrics_data.synced_lyrics.or(lyrics_data.plain_lyrics) {
-                    return Some(l);
-                }
-            }
-        }
+    if let Ok(resp) = client.get(&get_url).send().await
+        && resp.status().is_success()
+        && let Ok(lyrics_data) = resp.json::<LrcLibResponse>().await
+        && let Some(lyrics) = lyrics_data.synced_lyrics.or(lyrics_data.plain_lyrics)
+    {
+        return Some(lyrics);
     }
 
     // 2. Fallback: Broader search if exact match fails
@@ -46,12 +44,11 @@ pub async fn fetch_online_lyrics(track: &Track) -> Option<String> {
         urlencoding::encode(title)
     );
 
-    if let Ok(resp) = client.get(search_url).send().await {
-        if let Ok(results) = resp.json::<Vec<LrcLibResponse>>().await {
-            if let Some(first) = results.into_iter().next() {
-                return first.synced_lyrics.or(first.plain_lyrics);
-            }
-        }
+    if let Ok(resp) = client.get(search_url).send().await
+        && let Ok(results) = resp.json::<Vec<LrcLibResponse>>().await
+        && let Some(first) = results.into_iter().next()
+    {
+        return first.synced_lyrics.or(first.plain_lyrics);
     }
 
     None
@@ -76,13 +73,17 @@ pub async fn scrobble_to_lastfm(config: &LastFmConfig, track: &Track) -> anyhow:
     params.insert("api_key".to_string(), config.api_key.clone());
     params.insert("sk".to_string(), config.session_key.clone());
 
-    let sig_params: BTreeMap<&str, &str> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let sig_params: BTreeMap<&str, &str> = params
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     let signature = generate_lastfm_signature(&sig_params, &config.api_secret);
-    
+
     params.insert("api_sig".to_string(), signature);
     params.insert("format".to_string(), "json".to_string());
 
-    let _ = client.post("https://ws.audioscrobbler.com/2.0/")
+    let _ = client
+        .post("https://ws.audioscrobbler.com/2.0/")
         .form(&params)
         .send()
         .await?;
